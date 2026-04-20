@@ -23,6 +23,7 @@ dependencies = [
     # Machine learning
     "hmmlearn>=0.3.2",       # 2-state Gaussian HMM (Baum-Welch EM)
     "xgboost>=2.0",          # XGBoost signal refinement layer
+    "optuna>=3.6",           # Bayesian hyperparameter optimisation
     "scikit-learn>=1.4",     # preprocessing, metrics, cross-validation
 
     # Visualization
