@@ -28,9 +28,7 @@ import yfinance as yf
 from scipy.stats import norm
 from scipy.interpolate import interp1d
 from datetime import datetime, timedelta
-import os
-
-os.makedirs("data", exist_ok=True)
+from prism.paths import DATA_DIR
 
 # ─────────────────────────────────────────────
 # SECTION 1: Download SPY and VIX daily data
@@ -38,14 +36,14 @@ os.makedirs("data", exist_ok=True)
 
 def download_spy_vix(start: str = "2015-01-01", end: str = "2024-12-31") -> pd.DataFrame:
     """
-    Download SPY OHLCV and VIX close from Yahoo Finance.
+    Download SPY OHLCV, VIX close, and VIX9D close from Yahoo Finance.
 
     Returns
     -------
     pd.DataFrame
         Daily index with columns:
         spy_open, spy_high, spy_low, spy_close, spy_adj_close, spy_volume,
-        vix_close, log_return
+        vix_close, vix9d_close, log_return
     """
     print("Downloading SPY daily data...")
     spy_raw = yf.download("SPY", start=start, end=end, auto_adjust=True, progress=False)
@@ -53,24 +51,32 @@ def download_spy_vix(start: str = "2015-01-01", end: str = "2024-12-31") -> pd.D
     print("Downloading VIX daily data...")
     vix_raw = yf.download("^VIX", start=start, end=end, auto_adjust=True, progress=False)
 
-    # Flatten multi-level columns if present (yfinance ≥0.2 returns MultiIndex)
-    if isinstance(spy_raw.columns, pd.MultiIndex):
-        spy_raw.columns = ["_".join(c).strip().lower() for c in spy_raw.columns]
-    else:
-        spy_raw.columns = [c.lower().replace(" ", "_") for c in spy_raw.columns]
+    print("Downloading VIX9D daily data...")
+    vix9d_raw = yf.download("^VIX9D", start=start, end=end, auto_adjust=True, progress=False)
 
-    if isinstance(vix_raw.columns, pd.MultiIndex):
-        vix_raw.columns = ["_".join(c).strip().lower() for c in vix_raw.columns]
-    else:
-        vix_raw.columns = [c.lower().replace(" ", "_") for c in vix_raw.columns]
+    def _flatten(df):
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = ["_".join(c).strip().lower() for c in df.columns]
+        else:
+            df.columns = [c.lower().replace(" ", "_") for c in df.columns]
+        return df
 
-    # Identify close columns regardless of yfinance version naming
-    spy_close_col = next(c for c in spy_raw.columns if "close" in c)
-    vix_close_col = next(c for c in vix_raw.columns if "close" in c)
+    spy_raw   = _flatten(spy_raw)
+    vix_raw   = _flatten(vix_raw)
+    vix9d_raw = _flatten(vix9d_raw)
+
+    spy_close_col  = next(c for c in spy_raw.columns  if "close" in c)
+    vix_close_col  = next(c for c in vix_raw.columns  if "close" in c)
+    vix9d_close_col = next(c for c in vix9d_raw.columns if "close" in c)
 
     df = spy_raw.copy()
     df.columns = [f"spy_{c}" for c in df.columns]
-    df["vix_close"] = vix_raw[vix_close_col]
+    df["vix_close"]   = vix_raw[vix_close_col]
+    df["vix9d_close"] = vix9d_raw[vix9d_close_col]
+
+    # VIX9D starts in 2011; before that, fall back to VIX as proxy
+    df["vix9d_close"] = df["vix9d_close"].fillna(df["vix_close"])
+
     df = df.dropna(subset=[f"spy_{spy_close_col}", "vix_close"])
 
     # Log returns for HMM / XGBoost feature pipeline
@@ -78,8 +84,8 @@ def download_spy_vix(start: str = "2015-01-01", end: str = "2024-12-31") -> pd.D
     df = df.dropna(subset=["log_return"])
 
     df.index.name = "date"
-    df.to_csv("data/spy_vix_daily.csv")
-    print(f"  Saved {len(df)} rows to data/spy_vix_daily.csv")
+    df.to_csv(DATA_DIR / "spy_vix_daily.csv")
+    print(f"  Saved {len(df)} rows to {DATA_DIR / 'spy_vix_daily.csv'}")
     return df
 
 
@@ -176,7 +182,7 @@ def calibrate_skew_multipliers(
                                  kind="linear", fill_value="extrapolate")
         df_mults = pd.DataFrame({"moneyness": fallback_m, "skew_multiplier": fallback_v,
                                  "source": "hardcoded_fallback"})
-        df_mults.to_csv("data/skew_multipliers.csv", index=False)
+        df_mults.to_csv(DATA_DIR / "skew_multipliers.csv", index=False)
         return multiplier_fn
 
     # Smooth the raw iv_ratio by fitting a rolling median
@@ -212,8 +218,8 @@ def calibrate_skew_multipliers(
         "skew_multiplier": grid_values,
         "source": f"yfinance_snapshot_{expiry}",
     })
-    df_mults.to_csv("data/skew_multipliers.csv", index=False)
-    print("  Saved skew multipliers to data/skew_multipliers.csv")
+    df_mults.to_csv(DATA_DIR / "skew_multipliers.csv", index=False)
+    print(f"  Saved skew multipliers to {DATA_DIR / 'skew_multipliers.csv'}")
     print(df_mults[["moneyness", "skew_multiplier"]].to_string(index=False))
 
     return multiplier_fn
@@ -253,16 +259,28 @@ def get_option_price(
     vix: float,
     skew_fn: interp1d,
     r: float = 0.04,
+    vix9d: float = None,
 ) -> float:
     """
     Core pricing function used by the backtest engine.
 
-    IV(K, T) = VIX × skew_multiplier(K/S) × term_structure_adj(T)
+    IV(K, T) = IV_atm(T) × skew_multiplier(K/S)
 
-    Term structure adjustment (Error source #3):
-        Uses a simple sqrt-of-time scaling anchored at 30 days.
-        Formula: adj = sqrt(30 / DTE), clipped to [0.8, 1.4] to avoid extremes.
-        If VIX9D is available, a two-point interpolation is used instead.
+    Term structure (ATM IV at horizon T):
+        Uses linear variance interpolation between VIX9D (9-day) and VIX (30-day).
+        Total variance is proportional to time, so interpolation is done in
+        variance space (not vol space) to avoid Jensen's inequality bias.
+
+        TotalVar(9)  = (VIX9D/100)² × 9
+        TotalVar(30) = (VIX/100)²   × 30
+
+        For any T:
+            TotalVar(T) = TotalVar(9) + [TotalVar(30) - TotalVar(9)]
+                          × (T - 9) / (30 - 9)
+            IV_atm(T)   = sqrt(TotalVar(T) / T)
+
+        When VIX9D is unavailable, falls back to VIX as the single anchor
+        (equivalent to flat variance term structure assumption).
 
     Parameters
     ----------
@@ -270,29 +288,41 @@ def get_option_price(
     K       : float   Option strike
     T_days  : float   Days to expiry
     vix     : float   VIX index value (e.g. 18.5 for 18.5%)
-    skew_fn : interp1d  Calibrated skew multiplier function (output of calibrate_skew_multipliers)
+    skew_fn : interp1d  Calibrated skew multiplier function
     r       : float   Risk-free rate (annualised), default 4%
+    vix9d   : float   VIX9D index value; if None, falls back to flat term structure
 
     Returns
     -------
     float  Black-Scholes put mid price
     """
-    T_years = T_days / 365.0
-    vix_decimal = vix / 100.0
+    T_years   = T_days / 365.0
     moneyness = K / S
 
-    # --- Skew correction (Error source #1) ---
+    # --- Term structure: variance interpolation ---
+    if T_days <= 0:
+        # Expired or same day: intrinsic only
+        return max(K - S, 0.0)
+
+    total_var_30 = (vix / 100.0) ** 2 * 30.0
+
+    if vix9d is not None and vix9d > 0:
+        total_var_9 = (vix9d / 100.0) ** 2 * 9.0
+        # Linear interpolation / extrapolation in variance space
+        slope = (total_var_30 - total_var_9) / (30.0 - 9.0)
+        total_var_T = total_var_9 + slope * (T_days - 9.0)
+    else:
+        # Flat variance term structure fallback (old behaviour)
+        total_var_T = total_var_30 * (T_days / 30.0)
+
+    # Guard against negative variance from aggressive extrapolation
+    total_var_T = max(total_var_T, 1e-8)
+    iv_atm = np.sqrt(total_var_T / T_days)      # annualised ATM vol at horizon T
+
+    # --- Skew correction ---
     skew_mult = float(np.clip(skew_fn(moneyness), 0.80, 3.0))
 
-    # --- Term structure correction (Error source #3) ---
-    # sqrt(30/T) approximation: shorter DTE → higher effective IV
-    if T_days > 0:
-        term_adj = np.sqrt(30.0 / T_days)
-        term_adj = np.clip(term_adj, 0.80, 1.50)
-    else:
-        term_adj = 1.50
-
-    sigma = vix_decimal * skew_mult * term_adj
+    sigma = iv_atm * skew_mult
 
     return black_scholes_put(S, K, T_years, r, sigma)
 
@@ -372,11 +402,14 @@ def build_option_price_history(
     records = []
 
     for date, row in spy_vix_df.iterrows():
-        S = float(row[close_col])
-        vix = float(row["vix_close"])
+        S    = float(row[close_col])
+        vix  = float(row["vix_close"])
+        vix9d = float(row["vix9d_close"]) if "vix9d_close" in row.index else None
 
         if np.isnan(S) or np.isnan(vix) or S <= 0 or vix <= 0:
             continue
+        if vix9d is not None and (np.isnan(vix9d) or vix9d <= 0):
+            vix9d = None
 
         # Strikes (moneyness-based, model-free — avoids circular IV dependency)
         K1 = round(S * short_leg_moneyness, 2)  # short leg
@@ -387,24 +420,31 @@ def build_option_price_history(
         T_days = (expiry - pd.Timestamp(date)).days
 
         # Option prices
-        price_short = get_option_price(S, K1, T_days, vix, skew_fn, r)
-        price_long  = get_option_price(S, K2, T_days, vix, skew_fn, r)
+        price_short = get_option_price(S, K1, T_days, vix, skew_fn, r, vix9d)
+        price_long  = get_option_price(S, K2, T_days, vix, skew_fn, r, vix9d)
 
         # Spread economics
         spread_mid      = price_short - price_long          # net credit received
         spread_max_loss = (K1 - K2) - spread_mid            # per share
         spread_max_loss_contract = spread_max_loss * 100    # per contract (100 shares)
 
-        # IV used (for diagnostics)
-        vix_dec = vix / 100.0
-        term_adj = float(np.clip(np.sqrt(30.0 / T_days), 0.80, 1.50)) if T_days > 0 else 1.50
-        iv_short = vix_dec * float(skew_fn(K1 / S)) * term_adj
-        iv_long  = vix_dec * float(skew_fn(K2 / S)) * term_adj
+        # IV used (for diagnostics) — mirrors get_option_price variance interpolation
+        total_var_30 = (vix / 100.0) ** 2 * 30.0
+        if vix9d is not None:
+            total_var_9 = (vix9d / 100.0) ** 2 * 9.0
+            slope = (total_var_30 - total_var_9) / (30.0 - 9.0)
+            total_var_T = max(total_var_9 + slope * (T_days - 9.0), 1e-8)
+        else:
+            total_var_T = max(total_var_30 * (T_days / 30.0), 1e-8)
+        iv_atm   = np.sqrt(total_var_T / T_days)
+        iv_short = iv_atm * float(skew_fn(K1 / S))
+        iv_long  = iv_atm * float(skew_fn(K2 / S))
 
         records.append({
             "date":                    date,
             "spy_close":               round(S, 2),
             "vix_close":               round(vix, 2),
+            "vix9d_close":             round(vix9d, 2) if vix9d is not None else np.nan,
             "K1_short":                K1,
             "K2_long":                 K2,
             "T_days":                  T_days,
@@ -419,8 +459,8 @@ def build_option_price_history(
         })
 
     df_out = pd.DataFrame(records).set_index("date")
-    df_out.to_csv("data/option_prices_fallback.csv")
-    print(f"  Saved {len(df_out)} rows to data/option_prices_fallback.csv")
+    df_out.to_csv(DATA_DIR / "option_prices_fallback.csv")
+    print(f"  Saved {len(df_out)} rows to {DATA_DIR / 'option_prices_fallback.csv'}")
     print("\nSample output (last 5 rows):")
     print(df_out.tail(5)[["spy_close","vix_close","K1_short","K2_long",
                            "spread_mid","spread_max_loss_contract","iv_short_used"]].to_string())
@@ -447,16 +487,19 @@ def skew_correction_diagnostic(spy_vix_df: pd.DataFrame, skew_fn: interp1d) -> N
 
     results = []
     for date, row in sample.iterrows():
-        S   = float(row[close_col])
-        vix = float(row["vix_close"])
+        S     = float(row[close_col])
+        vix   = float(row["vix_close"])
+        vix9d = float(row["vix9d_close"]) if "vix9d_close" in row.index else None
+        if vix9d is not None and (np.isnan(vix9d) or vix9d <= 0):
+            vix9d = None
         K1  = S * 0.95
         K2  = S * 0.91
         T   = 30
 
-        spread_naive    = (get_option_price(S, K1, T, vix, flat_fn) -
-                           get_option_price(S, K2, T, vix, flat_fn))
-        spread_corrected = (get_option_price(S, K1, T, vix, skew_fn) -
-                            get_option_price(S, K2, T, vix, skew_fn))
+        spread_naive    = (get_option_price(S, K1, T, vix, flat_fn, vix9d=vix9d) -
+                           get_option_price(S, K2, T, vix, flat_fn, vix9d=vix9d))
+        spread_corrected = (get_option_price(S, K1, T, vix, skew_fn, vix9d=vix9d) -
+                            get_option_price(S, K2, T, vix, skew_fn, vix9d=vix9d))
         results.append({
             "vix_regime": pd.cut([vix], bins=[0,15,20,30,100],
                                   labels=["low(<15)","mid(15-20)","high(20-30)","spike(>30)"])[0],
@@ -471,8 +514,8 @@ def skew_correction_diagnostic(spy_vix_df: pd.DataFrame, skew_fn: interp1d) -> N
                .round(4))
     print(diag_df.to_string())
     print("\n  pct_diff = how much larger corrected spread is vs naive (positive = naive underestimates)")
-    diag_df.to_csv("data/skew_diagnostic.csv")
-    print("  Saved to data/skew_diagnostic.csv")
+    diag_df.to_csv(DATA_DIR / "skew_diagnostic.csv")
+    print(f"  Saved to {DATA_DIR / 'skew_diagnostic.csv'}")
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -497,8 +540,9 @@ if __name__ == "__main__":
     skew_correction_diagnostic(spy_vix, skew_fn)
 
     print("\n=== Pipeline complete ===")
+    print(f"Output directory: {DATA_DIR}")
     print("Output files:")
-    print("  data/spy_vix_daily.csv           — SPY OHLCV + VIX + log_returns")
-    print("  data/skew_multipliers.csv        — per-moneyness IV multipliers")
-    print("  data/option_prices_fallback.csv  — daily spread prices (K1=0.95S, K2=0.91S)")
-    print("  data/skew_diagnostic.csv         — correction impact by VIX regime")
+    print("  spy_vix_daily.csv           — SPY OHLCV + VIX + log_returns")
+    print("  skew_multipliers.csv        — per-moneyness IV multipliers")
+    print("  option_prices_fallback.csv  — daily spread prices (K1=0.95S, K2=0.91S)")
+    print("  skew_diagnostic.csv         — correction impact by VIX regime")
