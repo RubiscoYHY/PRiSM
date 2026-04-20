@@ -1,7 +1,7 @@
 # PRISM
 **Put-spread Regime-Informed Simulation & Management**
 
-MGT 6081 — Quantitative Finance | Georgia Institute of Technology | Spring 2026
+MGT 6081 — Derivative Securities | Georgia Institute of Technology | Spring 2026
 
 ---
 
