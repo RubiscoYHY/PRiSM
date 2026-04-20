@@ -32,6 +32,9 @@ dependencies = [
 
     # Utilities
     "tqdm>=4.66",            # progress bars for Monte Carlo simulation
+
+    # Live calculator
+    "flask>=3.0",            # web server for live trading dashboard
 ]
 
 [project.optional-dependencies]
@@ -47,9 +50,15 @@ dev = [
 # Only needed if using the Bloomberg IV interface (Section 5.1).
 # The VIX fallback (Section 5.2) works without it.
 
+[project.scripts]
+prism = "live_calculator:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["prism*"]
+
+[tool.setuptools]
+py-modules = ["live_calculator"]
 
 [tool.black]
 line-length = 100

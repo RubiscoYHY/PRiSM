@@ -1,0 +1,1386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PRiSM — Live Calculator</title>
+<style>
+  :root {
+    --bg:       #0C0F0D;
+    --surface:  #101310;
+    --border:   #1C2420;
+    --text:     #F6EEE3;
+    --muted:    #7D8882;
+    --green:    #72C495;
+    --red:      #C4899C;
+    --yellow:   #D4A860;
+    --blue:     #7FB5C8;
+    --accent:   #C8A478;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'Consolas', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+    padding: 24px;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .logo { font-size: 20px; font-weight: 700; letter-spacing: 4px; color: var(--accent); }
+  .logo span { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 12px; letter-spacing: 1px; }
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  #timestamp { color: var(--muted); font-size: 11px; }
+  .market-badge {
+    font-size: 10px; padding: 3px 8px; border-radius: 4px;
+    font-weight: 600; letter-spacing: 1px;
+  }
+  .market-badge.open   { background: rgba(114,196,149,0.15); color: var(--green); border: 1px solid rgba(114,196,149,0.35); }
+  .market-badge.closed { background: rgba(139,168,152,0.12); color: var(--muted); border: 1px solid rgba(139,168,152,0.25); }
+
+  /* ── NAV / positions row ── */
+  .nav-row {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 16px;
+  }
+  .nav-row label { color: var(--muted); font-size: 11px; letter-spacing: 1px; text-transform: uppercase; white-space: nowrap; }
+  .nav-row input {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); font-family: inherit; font-size: 13px;
+    padding: 6px 10px; width: 140px;
+  }
+  .nav-row input:focus { outline: none; border-color: var(--accent); }
+  .nav-row select {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); font-family: inherit; font-size: 13px;
+    padding: 6px 10px; cursor: pointer;
+  }
+
+  /* ── Tab bar ── */
+  .tab-bar {
+    display: flex; gap: 4px; margin-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0;
+  }
+  .tab-btn {
+    background: transparent; border: none; cursor: pointer;
+    font-family: inherit; font-size: 11px; font-weight: 600;
+    letter-spacing: 2px; text-transform: uppercase;
+    color: var(--muted); padding: 10px 20px;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.2s, border-color 0.2s;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-badge {
+    display: inline-block; font-size: 9px; padding: 2px 6px;
+    border-radius: 3px; margin-left: 8px; vertical-align: middle;
+  }
+  .tab-badge.open   { background: rgba(200,164,120,0.18); color: var(--accent); }
+  .tab-badge.closed { background: rgba(196,137,156,0.18); color: var(--red); }
+  .tab-badge.loading { background: rgba(139,168,152,0.15); color: var(--muted); }
+
+  /* ── Tab pages ── */
+  .tab-page { display: none; }
+  .tab-page.active { display: block; }
+
+  /* ── Grid layout ── */
+  .grid { display: grid; gap: 16px; }
+  .grid-3 { grid-template-columns: repeat(3, 1fr); }
+  .grid-2 { grid-template-columns: repeat(2, 1fr); }
+  .grid-4 { grid-template-columns: repeat(4, 1fr); }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+  }
+  .card-label {
+    font-size: 10px; font-weight: 600; letter-spacing: 2px;
+    color: var(--muted); text-transform: uppercase; margin-bottom: 10px;
+  }
+  .card-value { font-size: 26px; font-weight: 700; }
+  .card-sub   { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+  /* ── Signal card ── */
+  .signal-card {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 24px;
+    border-radius: 10px;
+    border: 2px solid;
+    transition: all 0.3s;
+    margin-bottom: 16px;
+  }
+  .signal-card.open    { background: rgba(200,164,120,0.08);  border-color: rgba(200,164,120,0.4); }
+  .signal-card.closed  { background: rgba(196,137,156,0.08);  border-color: rgba(196,137,156,0.4); }
+  .signal-card.loading { background: rgba(139,168,152,0.07);  border-color: var(--border); }
+  .signal-light {
+    width: 64px; height: 64px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px; flex-shrink: 0;
+  }
+  .signal-card.open    .signal-light { background: rgba(200,164,120,0.18); box-shadow: 0 0 24px rgba(200,164,120,0.35); }
+  .signal-card.closed  .signal-light { background: rgba(196,137,156,0.18); box-shadow: 0 0 24px rgba(196,137,156,0.35); }
+  .signal-card.loading .signal-light { background: rgba(139,168,152,0.15); }
+  .signal-text h2 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+  .signal-card.open    .signal-text h2 { color: var(--accent); }
+  .signal-card.closed  .signal-text h2 { color: var(--red); }
+  .signal-card.loading .signal-text h2 { color: var(--muted); }
+  .signal-text p { color: var(--muted); font-size: 12px; }
+  .signal-checks { margin-left: auto; display: flex; flex-direction: column; gap: 6px; }
+  .check-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .check-icon { width: 18px; text-align: center; }
+  .pass  { color: var(--accent); }
+  .fail  { color: var(--red); }
+
+  /* ── Gauge bars (p_calm / p_safe) ── */
+  .gauge-bar-bg {
+    height: 8px; background: var(--border); border-radius: 4px; margin: 10px 0 6px;
+    position: relative; overflow: visible;
+  }
+  .gauge-bar-fill {
+    height: 100%; border-radius: 4px;
+    transition: width 0.7s cubic-bezier(0.4, 0, 0.2, 1);
+    min-width: 0;
+  }
+  .gauge-bar-fill.pass { background: linear-gradient(90deg, #6B5230, var(--accent)); }
+  .gauge-bar-fill.fail { background: linear-gradient(90deg, #5C3545, var(--red)); }
+  .gauge-threshold-marker {
+    position: absolute; top: -5px; width: 2px; height: 18px;
+    background: var(--yellow); border-radius: 1px;
+  }
+  .gauge-labels { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); }
+
+  /* ── Spread table ── */
+  .spread-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+  .spread-item .label { font-size: 10px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; }
+  .spread-item .value { font-size: 16px; font-weight: 600; margin-top: 3px; }
+
+  /* ── Feature table ── */
+  .feature-table { width: 100%; border-collapse: collapse; }
+  .feature-table th {
+    text-align: left; font-size: 10px; color: var(--muted);
+    letter-spacing: 1px; text-transform: uppercase;
+    padding: 0 0 8px; border-bottom: 1px solid var(--border);
+  }
+  .feature-table td { padding: 7px 0; border-bottom: 1px solid rgba(43,79,60,0.6); }
+  .feature-table td:last-child { text-align: right; font-weight: 600; color: var(--blue); }
+
+  /* ── Buttons ── */
+  .btn {
+    background: var(--accent); color: white; border: none; border-radius: 6px;
+    font-family: inherit; font-size: 12px; font-weight: 600; letter-spacing: 1px;
+    padding: 8px 16px; cursor: pointer; transition: opacity 0.2s;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ── Divergence warning ── */
+  .diverge-warning {
+    background: rgba(212,168,96,0.08); border: 1px solid rgba(212,168,96,0.35);
+    border-radius: 8px; padding: 12px 16px; color: var(--yellow);
+    font-size: 12px; margin-bottom: 16px; display: none;
+  }
+
+  /* ── Error box ── */
+  .error-box {
+    background: rgba(212,130,122,0.10); border: 1px solid rgba(212,130,122,0.30);
+    border-radius: 8px; padding: 16px; color: var(--red);
+    font-size: 12px; white-space: pre-wrap; display: none;
+    margin-bottom: 16px;
+  }
+
+  /* ── Status bar ── */
+  .status-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 20px; padding-top: 12px;
+    border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--muted);
+  }
+  .status-bar .dot {
+    display: inline-block; width: 6px; height: 6px;
+    border-radius: 50%; margin-right: 6px;
+  }
+  .dot.green  { background: var(--green); }
+  .dot.red    { background: var(--red); }
+  .dot.gray   { background: var(--muted); }
+  .dot.yellow { background: var(--yellow); }
+
+  .section-title {
+    font-size: 10px; font-weight: 600; letter-spacing: 2px;
+    color: var(--muted); text-transform: uppercase; margin-bottom: 14px;
+  }
+
+  .muted  { color: var(--muted); }
+  .green  { color: var(--green); }
+  .red    { color: var(--red); }
+  .blue   { color: var(--blue); }
+  .yellow { color: var(--yellow); }
+
+  /* ═══════════════════════════════════════════════
+     POSITIONS TAB
+  ═══════════════════════════════════════════════ */
+
+  /* Sticky overview header */
+  .pos-header {
+    position: sticky; top: 0; z-index: 100;
+    background: var(--bg);
+    padding: 16px 0 14px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 20px;
+    display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
+  }
+  .pos-portfolio { flex: 1; min-width: 200px; }
+  .pos-portfolio-val { font-size: 28px; font-weight: 700; line-height: 1.15; }
+  .pos-portfolio-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .pos-open-wrap { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+  .pos-donuts { display: flex; gap: 28px; align-items: center; }
+  .donut-wrap  { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .donut-svg   { width: 90px; height: 90px; }
+  .donut-label { font-size: 10px; color: var(--muted); letter-spacing: 1px;
+                 text-transform: uppercase; text-align: center; }
+  .donut-sub   { font-size: 11px; color: var(--text); text-align: center; }
+
+  /* Position cards */
+  .pos-card {
+    border: 2px solid var(--border); border-radius: 10px;
+    margin-bottom: 16px; background: var(--surface); overflow: hidden;
+    transition: border-color 0.3s;
+  }
+  .pos-card.profit    { border-color: rgba(114,196,149,0.45); }
+  .pos-card.loss      { border-color: rgba(196,137,156,0.45); }
+  .pos-card.closed-card { border-color: var(--border); opacity: 0.7; }
+
+  .pos-card-head {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 11px 16px; border-bottom: 1px solid var(--border);
+  }
+  .pos-card-id  { font-weight: 700; font-size: 12px; color: var(--accent); letter-spacing: 1px; }
+  .pos-status-badge {
+    font-size: 9px; font-weight: 700; letter-spacing: 1.5px; padding: 3px 7px;
+    border-radius: 3px; text-transform: uppercase;
+  }
+  .pos-status-badge.open   { background: rgba(114,196,149,0.15); color: var(--green); border: 1px solid rgba(114,196,149,0.35); }
+  .pos-status-badge.closed { background: rgba(139,168,152,0.12); color: var(--muted); border: 1px solid rgba(139,168,152,0.25); }
+  .pos-meta        { color: var(--muted); font-size: 11px; flex: 1; }
+  .pos-head-pnl    { font-size: 14px; font-weight: 700; white-space: nowrap; }
+  .pos-head-actions { display: flex; gap: 6px; }
+
+  .pos-card-body { padding: 14px 16px; }
+
+  /* Two-leg grid */
+  .pos-legs {
+    display: grid; grid-template-columns: 1fr auto 1fr;
+    gap: 12px; margin-bottom: 12px; align-items: start;
+  }
+  .pos-leg {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px;
+  }
+  .pos-leg-label  { font-size: 9px; font-weight: 700; letter-spacing: 2px;
+                    color: var(--muted); text-transform: uppercase; margin-bottom: 6px; }
+  .pos-leg-strike { font-size: 18px; font-weight: 700; }
+  .pos-leg-row    { display: flex; justify-content: space-between; font-size: 11px;
+                    color: var(--muted); margin-top: 3px; }
+  .pos-leg-row span:last-child { color: var(--text); font-weight: 600; }
+  .pos-leg-mid    { display: flex; flex-direction: column; align-items: center;
+                    justify-content: center; gap: 7px; font-size: 11px; color: var(--muted); padding-top: 8px; }
+  .pos-leg-mid .big { font-size: 16px; font-weight: 700; color: var(--text); }
+
+  /* P/L summary */
+  .pos-pnl-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 12px;
+  }
+  .pos-pnl-row.profit { background: rgba(114,196,149,0.08); }
+  .pos-pnl-row.loss   { background: rgba(196,137,156,0.08); }
+  .pos-pnl-row .pnl-amount { font-size: 16px; font-weight: 700; }
+
+  /* Signal + action row */
+  .pos-action-row { display: flex; align-items: center; gap: 10px; }
+  .signal-dot-sm  { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }
+  .signal-dot-sm.sig-green { background: var(--green); box-shadow: 0 0 7px rgba(114,196,149,0.65); }
+  .signal-dot-sm.sig-red   { background: var(--red);   box-shadow: 0 0 7px rgba(196,137,156,0.65); }
+  .signal-dot-sm.sig-muted { background: var(--muted); }
+  .signal-reason  { font-size: 11px; color: var(--muted); flex: 1; }
+
+  /* Closed position summary */
+  .pos-closed-summary {
+    display: flex; flex-wrap: wrap; gap: 16px;
+    padding: 10px 12px; border-radius: 6px;
+    background: var(--bg); border: 1px solid var(--border);
+    margin-bottom: 8px; font-size: 11px;
+  }
+  .cls-label { color: var(--muted); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
+  .cls-val   { font-weight: 700; margin-top: 2px; }
+
+  /* Edit form */
+  .pos-edit-form { display: none; padding: 14px 16px; border-top: 1px solid var(--border); background: rgba(200,164,120,0.04); }
+  .pos-edit-form.active { display: block; }
+  .edit-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-bottom: 12px; }
+  .edit-field label {
+    display: block; font-size: 10px; color: var(--muted);
+    letter-spacing: 1px; text-transform: uppercase; margin-bottom: 4px;
+  }
+  .edit-field input {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 5px; color: var(--text); font-family: inherit;
+    font-size: 12px; padding: 5px 8px;
+  }
+  .edit-field input:focus { outline: none; border-color: var(--accent); }
+
+  /* Close confirmation form */
+  .pos-close-form { display: none; padding: 14px 16px; border-top: 1px solid var(--border); background: rgba(196,137,156,0.04); }
+  .pos-close-form.active { display: block; }
+  .close-form-title { font-size: 11px; font-weight: 700; letter-spacing: 2px; color: var(--red);
+                      text-transform: uppercase; margin-bottom: 10px; }
+  .close-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-bottom: 10px; }
+  .close-preview { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .close-preview strong { font-size: 14px; }
+
+  /* Small secondary button */
+  .btn-sm {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 4px; font-family: inherit; font-size: 10px; font-weight: 600;
+    letter-spacing: 1px; padding: 4px 10px; cursor: pointer;
+    transition: border-color 0.2s, color 0.2s; text-transform: uppercase;
+  }
+  .btn-sm:hover { border-color: var(--accent); color: var(--accent); }
+  /* Danger (close) button */
+  .btn-danger {
+    background: rgba(196,137,156,0.15); border: 1px solid rgba(196,137,156,0.4);
+    color: var(--red); border-radius: 5px; font-family: inherit; font-size: 11px;
+    font-weight: 600; letter-spacing: 1px; padding: 6px 14px; cursor: pointer;
+    transition: opacity 0.2s; text-transform: uppercase;
+  }
+  .btn-danger:hover { opacity: 0.8; }
+
+  /* Empty state */
+  .pos-empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .pos-empty-icon { font-size: 36px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════
+     HEADER
+════════════════════════════════════════════════════ -->
+<header>
+  <div>
+    <span class="logo">PR<em style="font-style:normal; font-size:15px; letter-spacing:4px;">i</em>SM<span>Put-spread Regime-informed Signal Monitor</span></span>
+  </div>
+  <div class="header-right">
+    <span id="timestamp" class="muted">—</span>
+    <span id="market-badge" class="market-badge closed">CLOSED</span>
+    <button class="btn" id="refresh-btn" onclick="refresh()">REFRESH</button>
+  </div>
+</header>
+
+<!-- NAV / positions (shared across both pages) -->
+<div class="nav-row">
+  <label>Portfolio NAV ($)</label>
+  <input type="number" id="nav-input" value="100000" min="1000" step="1000" onchange="refresh()" />
+  <label style="margin-left:16px;">Open positions</label>
+  <select id="n-open-input" onchange="refresh()">
+    <option value="0">0</option>
+    <option value="1">1</option>
+    <option value="2">2</option>
+    <option value="3">3</option>
+    <option value="4">4 (full)</option>
+  </select>
+</div>
+
+<!-- Error display -->
+<div class="error-box" id="error-box"></div>
+
+<!-- ═══════════════════════════════════════════════════
+     TAB BAR
+════════════════════════════════════════════════════ -->
+<div class="tab-bar">
+  <button class="tab-btn active" id="tab-btn-prev" onclick="switchTab('prev')">
+    Yesterday's Close
+    <span class="tab-badge loading" id="tab-badge-prev">—</span>
+  </button>
+  <button class="tab-btn" id="tab-btn-live" onclick="switchTab('live')">
+    Today Live
+    <span class="tab-badge loading" id="tab-badge-live">—</span>
+  </button>
+  <button class="tab-btn" id="tab-btn-positions" onclick="switchTab('positions')">
+    Positions
+    <span class="tab-badge loading" id="tab-badge-positions">0/4</span>
+  </button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     PAGE 1 — YESTERDAY'S CLOSE (sig_prev)
+════════════════════════════════════════════════════ -->
+<div class="tab-page active" id="page-prev">
+
+  <!-- Signal banner -->
+  <div class="signal-card loading" id="sig-prev-card">
+    <div class="signal-light" id="sig-prev-light">⋯</div>
+    <div class="signal-text">
+      <h2 id="sig-prev-title">Loading…</h2>
+      <p id="sig-prev-sub">Fetching data and running models</p>
+    </div>
+    <div class="signal-checks" id="sig-prev-checks"></div>
+  </div>
+
+  <!-- Gauge row -->
+  <div class="grid grid-2" style="margin-bottom:16px;">
+
+    <div class="card">
+      <div class="card-label">Layer 1 — HMM Regime (prev close)</div>
+      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:2px;">
+        <span style="font-size:22px; font-weight:700;" id="prev-p-calm-val">—</span>
+        <span class="muted" style="font-size:11px;">threshold: <span id="prev-tc-val">—</span></span>
+      </div>
+      <div class="gauge-bar-bg">
+        <div class="gauge-bar-fill" id="prev-gauge-calm-fill" style="width:0%"></div>
+        <div class="gauge-threshold-marker" id="prev-gauge-calm-marker" style="left:71%"></div>
+      </div>
+      <div class="gauge-labels"><span>0</span><span>P(Calm)</span><span>1</span></div>
+      <div style="margin-top:8px; font-size:11px;" id="prev-calm-verdict">—</div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Layer 2 — XGBoost Safety (prev close)</div>
+      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:2px;">
+        <span style="font-size:22px; font-weight:700;" id="prev-p-safe-val">—</span>
+        <span class="muted" style="font-size:11px;">threshold: <span id="prev-ts-val">—</span></span>
+      </div>
+      <div class="gauge-bar-bg">
+        <div class="gauge-bar-fill" id="prev-gauge-safe-fill" style="width:0%"></div>
+        <div class="gauge-threshold-marker" id="prev-gauge-safe-marker" style="left:95%"></div>
+      </div>
+      <div class="gauge-labels"><span>0</span><span>P(Safe / no crash 30d)</span><span>1</span></div>
+      <div style="margin-top:8px; font-size:11px;" id="prev-safe-verdict">—</div>
+    </div>
+
+  </div>
+
+  <!-- Feature table -->
+  <div class="card">
+    <div class="section-title">Feature Vector — previous close</div>
+    <table class="feature-table">
+      <thead>
+        <tr><th>Feature</th><th>Description</th><th>Value</th></tr>
+      </thead>
+      <tbody id="prev-feature-tbody">
+        <tr><td colspan="3" class="muted">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</div><!-- /page-prev -->
+
+
+<!-- ═══════════════════════════════════════════════════
+     PAGE 2 — TODAY LIVE (sig_live)
+════════════════════════════════════════════════════ -->
+<div class="tab-page" id="page-live">
+
+  <!-- Divergence warning -->
+  <div class="diverge-warning" id="diverge-warning">
+    ⚠ Signals diverge: yesterday's close and live prices give opposite open/close decisions.
+    Treat the live signal as situational awareness only — the official decision uses yesterday's close.
+  </div>
+
+  <!-- Top row: signal + market prices -->
+  <div class="grid grid-3" style="margin-bottom:16px;">
+
+    <div class="signal-card loading" id="sig-live-card" style="grid-column:span 2;">
+      <div class="signal-light" id="sig-live-light">⋯</div>
+      <div class="signal-text">
+        <h2 id="sig-live-title">Loading…</h2>
+        <p id="sig-live-sub">Fetching live market data</p>
+      </div>
+      <div class="signal-checks" id="sig-live-checks"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">SPY</div>
+      <div class="card-value" id="spy-live">—</div>
+      <div class="card-sub" id="spy-sub">prev close —</div>
+      <div style="margin-top:12px;">
+        <div class="card-label">VIX</div>
+        <div style="font-size:20px; font-weight:700;" id="vix-live">—</div>
+      </div>
+      <div style="margin-top:10px;">
+        <div class="card-label">VIX9D</div>
+        <div style="font-size:20px; font-weight:700;" id="vix9d-live">—</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Gauge row -->
+  <div class="grid grid-2" style="margin-bottom:16px;">
+
+    <div class="card">
+      <div class="card-label">Layer 1 — HMM Regime (live)</div>
+      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:2px;">
+        <span style="font-size:22px; font-weight:700;" id="live-p-calm-val">—</span>
+        <span class="muted" style="font-size:11px;">threshold: <span id="live-tc-val">—</span></span>
+      </div>
+      <div class="gauge-bar-bg">
+        <div class="gauge-bar-fill" id="live-gauge-calm-fill" style="width:0%"></div>
+        <div class="gauge-threshold-marker" id="live-gauge-calm-marker" style="left:71%"></div>
+      </div>
+      <div class="gauge-labels"><span>0</span><span>P(Calm)</span><span>1</span></div>
+      <div style="margin-top:8px; font-size:11px;" id="live-calm-verdict">—</div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Layer 2 — XGBoost Safety (live)</div>
+      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:2px;">
+        <span style="font-size:22px; font-weight:700;" id="live-p-safe-val">—</span>
+        <span class="muted" style="font-size:11px;">threshold: <span id="live-ts-val">—</span></span>
+      </div>
+      <div class="gauge-bar-bg">
+        <div class="gauge-bar-fill" id="live-gauge-safe-fill" style="width:0%"></div>
+        <div class="gauge-threshold-marker" id="live-gauge-safe-marker" style="left:95%"></div>
+      </div>
+      <div class="gauge-labels"><span>0</span><span>P(Safe / no crash 30d)</span><span>1</span></div>
+      <div style="margin-top:8px; font-size:11px;" id="live-safe-verdict">—</div>
+    </div>
+
+  </div>
+
+  <!-- Spread parameters -->
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title">Spread Parameters — live prices</div>
+    <div class="spread-grid" id="spread-grid">
+      <div class="spread-item"><div class="label">Short leg K1 (−5%)</div><div class="value" id="K1">—</div></div>
+      <div class="spread-item"><div class="label">Long leg K2 (−9%)</div><div class="value" id="K2">—</div></div>
+      <div class="spread-item"><div class="label">Expiry</div><div class="value" id="expiry">—</div></div>
+      <div class="spread-item"><div class="label">DTE</div><div class="value" id="dte">—</div></div>
+      <div class="spread-item"><div class="label">Credit / share</div><div class="value green" id="credit-ps">—</div></div>
+      <div class="spread-item"><div class="label">Max loss / share</div><div class="value red" id="maxloss-ps">—</div></div>
+      <div class="spread-item"><div class="label">Contracts (20% CaR)</div><div class="value" id="contracts">—</div></div>
+      <div class="spread-item"><div class="label">Total credit</div><div class="value green" id="credit-total">—</div></div>
+      <div class="spread-item"><div class="label">Max loss exposure</div><div class="value red" id="maxloss-total">—</div></div>
+    </div>
+    <div style="margin-top:12px; font-size:11px; color:var(--muted);">
+      Strikes computed from live SPY. Credit/loss estimated via Black-Scholes + skew correction.
+    </div>
+  </div>
+
+  <!-- Live feature table -->
+  <div class="card">
+    <div class="section-title">Feature Vector — live intraday</div>
+    <table class="feature-table">
+      <thead>
+        <tr><th>Feature</th><th>Description</th><th>Value</th></tr>
+      </thead>
+      <tbody id="live-feature-tbody">
+        <tr><td colspan="3" class="muted">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</div><!-- /page-live -->
+
+
+<!-- ═══════════════════════════════════════════════════
+     PAGE 3 — POSITION MANAGER
+════════════════════════════════════════════════════ -->
+<div class="tab-page" id="page-positions">
+
+  <!-- ── Sticky overview header ── -->
+  <div class="pos-header">
+
+    <!-- Left: portfolio value -->
+    <div class="pos-portfolio">
+      <div class="card-label">Portfolio Value</div>
+      <div class="pos-portfolio-val" id="pos-portfolio-val">—</div>
+      <div class="pos-portfolio-sub">
+        Initial capital: <span id="pos-initial-cap">—</span>
+        &nbsp;<button class="btn-sm" onclick="editInitialCapital()">EDIT</button>
+      </div>
+      <div class="pos-portfolio-sub" style="margin-top:5px;">
+        Locked P/L: <span id="pos-locked-pnl">—</span>
+        &nbsp;·&nbsp;
+        Unrealized: <span id="pos-unrealized">—</span>
+      </div>
+    </div>
+
+    <!-- Center: open button -->
+    <div class="pos-open-wrap">
+      <button class="btn" id="open-pos-btn" onclick="openPosition()"
+              style="font-size:12px; padding:11px 20px; letter-spacing:2px;">
+        OPEN AT CURRENT MARKET
+      </button>
+      <div style="font-size:10px; color:var(--muted);" id="open-pos-hint">
+        Uses live SPY / VIX prices
+      </div>
+      <button class="btn-sm" style="margin-top:6px; color:var(--red); border-color:rgba(196,137,156,0.35);"
+              onclick="resetAllPositions()">
+        RESET ALL DATA
+      </button>
+    </div>
+
+    <!-- Right: donut charts -->
+    <div class="pos-donuts">
+
+      <!-- CaR exposure donut -->
+      <div class="donut-wrap">
+        <svg class="donut-svg" viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="34" fill="none" stroke="var(--border)" stroke-width="12"/>
+          <circle id="donut-car-fill" cx="50" cy="50" r="34" fill="none"
+                  stroke="var(--green)" stroke-width="12"
+                  stroke-dasharray="0 213.6" stroke-linecap="round"
+                  transform="rotate(-90 50 50)"
+                  style="transition: stroke-dasharray 0.6s ease, stroke 0.4s ease"/>
+          <text id="donut-car-pct" x="50" y="48" text-anchor="middle"
+                fill="var(--text)" font-family="monospace" font-size="15" font-weight="bold">0%</text>
+          <text x="50" y="63" text-anchor="middle"
+                fill="var(--muted)" font-family="monospace" font-size="9">CaR</text>
+        </svg>
+        <div class="donut-label">Capital at Risk</div>
+        <div class="donut-sub" id="donut-car-amount">—</div>
+      </div>
+
+      <!-- N/4 open positions donut -->
+      <div class="donut-wrap">
+        <svg class="donut-svg" viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="34" fill="none" stroke="var(--border)" stroke-width="12"/>
+          <circle id="donut-pos-fill" cx="50" cy="50" r="34" fill="none"
+                  stroke="var(--accent)" stroke-width="12"
+                  stroke-dasharray="0 213.6" stroke-linecap="round"
+                  transform="rotate(-90 50 50)"
+                  style="transition: stroke-dasharray 0.6s ease"/>
+          <text id="donut-pos-count" x="50" y="48" text-anchor="middle"
+                fill="var(--text)" font-family="monospace" font-size="15" font-weight="bold">0/4</text>
+          <text x="50" y="63" text-anchor="middle"
+                fill="var(--muted)" font-family="monospace" font-size="9">Open</text>
+        </svg>
+        <div class="donut-label">Open Positions</div>
+      </div>
+
+    </div>
+  </div><!-- /pos-header -->
+
+  <!-- ── Scrollable positions list ── -->
+  <div id="positions-list">
+    <div class="pos-empty">
+      <div class="pos-empty-icon">◈</div>
+      <div style="font-size:13px;">No positions yet — click "Open at Current Market" to begin.</div>
+    </div>
+  </div>
+
+</div><!-- /page-positions -->
+
+
+<!-- ═══════════════════════════════════════════════════
+     STATUS BAR
+════════════════════════════════════════════════════ -->
+<div class="status-bar">
+  <div>
+    <span class="dot gray" id="status-dot"></span>
+    <span id="status-text">Not loaded</span>
+  </div>
+  <div style="display:flex; align-items:center; gap:16px;">
+    <label style="cursor:pointer;">
+      <input type="checkbox" id="auto-refresh" checked onchange="toggleAutoRefresh()">
+      Auto-refresh every
+    </label>
+    <select id="refresh-interval" onchange="toggleAutoRefresh()">
+      <option value="60">1 min</option>
+      <option value="300" selected>5 min</option>
+      <option value="600">10 min</option>
+    </select>
+    <span class="muted" id="next-refresh-label"></span>
+  </div>
+</div>
+
+
+<script>
+// ── State ──────────────────────────────────────────────────────────
+let refreshTimer   = null;
+let nextRefreshAt  = null;
+let countdownTimer = null;
+let currentTab     = 'prev';
+
+const FEATURE_META = {
+  RV_5d:     "5-day realized vol (ann.)",
+  RV_20d:    "20-day realized vol (ann.)",
+  RV_60d:    "60-day realized vol (ann.)",
+  RV_ratio:  "RV_20d / RV_60d (vol acceleration)",
+  Mom_5d:    "5-day log return",
+  Mom_20d:   "20-day log return",
+  DD_60d:    "Drawdown from 60-day high",
+  RSkew_20d: "20-day realized skewness",
+  p_calm:    "HMM P(Calm) — Layer 1 output",
+};
+
+// Restore NAV from localStorage
+const savedNav = localStorage.getItem("prism_nav");
+if (savedNav) document.getElementById("nav-input").value = savedNav;
+
+// ── Utilities ──────────────────────────────────────────────────────
+function fmt(val, decimals = 2) {
+  if (val === null || val === undefined || val === "" || isNaN(val)) return "—";
+  return parseFloat(val).toFixed(decimals);
+}
+function fmtDollar(val) {
+  if (val === null || val === undefined || isNaN(val)) return "—";
+  return "$" + parseFloat(val).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function setColor(el, pass) {
+  el.classList.remove("green", "red", "muted");
+  el.classList.add(pass ? "green" : "red");
+}
+
+// ── Tab switching ──────────────────────────────────────────────────
+function switchTab(name) {
+  currentTab = name;
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll(".tab-page").forEach(p => p.classList.remove("active"));
+  document.getElementById("tab-btn-" + name).classList.add("active");
+  document.getElementById("page-" + name).classList.add("active");
+  if (name === "positions") loadPositions();
+}
+
+// ── Gauge helper ───────────────────────────────────────────────────
+function setGauge(fillId, markerId, value, threshold, pass) {
+  const fill   = document.getElementById(fillId);
+  const marker = document.getElementById(markerId);
+  if (!fill || !marker) return;
+  const pct = Math.max(0, Math.min(100, value * 100));
+  fill.style.width = pct.toFixed(2) + "%";
+  fill.className   = "gauge-bar-fill " + (pass ? "pass" : "fail");
+  marker.style.left = (threshold * 100).toFixed(2) + "%";
+}
+
+// ── Signal card renderer (shared) ─────────────────────────────────
+function renderSignalCard(cardId, lightId, titleId, subId, checksId, sig, tc, ts, n_open) {
+  const card   = document.getElementById(cardId);
+  const light  = document.getElementById(lightId);
+  const title  = document.getElementById(titleId);
+  const sub    = document.getElementById(subId);
+  const checks = document.getElementById(checksId);
+
+  const open = sig.signal_open;
+  card.className = "signal-card " + (open ? "open" : "closed");
+  light.textContent = "●";
+
+  if (open) {
+    title.textContent = "OPEN POSITION";
+    sub.textContent   = "All three conditions satisfied — spread may be initiated";
+  } else {
+    title.textContent = "DO NOT OPEN";
+    const reasons = [];
+    if (!sig.calm_pass)   reasons.push("HMM regime is Turbulent");
+    if (!sig.safe_pass)   reasons.push("XGBoost crash risk elevated");
+    if (!sig.slots_avail) reasons.push("Maximum 4 positions reached");
+    sub.textContent = reasons.join(" · ") || "Conditions not met";
+  }
+
+  checks.innerHTML = `
+    <div class="check-row">
+      <span class="check-icon ${sig.calm_pass   ? 'pass':'fail'}">${sig.calm_pass   ? '✓':'✗'}</span>
+      <span>p_calm ${fmt(sig.p_calm,4)} &gt; tc&nbsp;${tc}</span>
+    </div>
+    <div class="check-row">
+      <span class="check-icon ${sig.safe_pass   ? 'pass':'fail'}">${sig.safe_pass   ? '✓':'✗'}</span>
+      <span>p_safe ${fmt(sig.p_safe,4)} &gt; ts&nbsp;${ts}</span>
+    </div>
+    <div class="check-row">
+      <span class="check-icon ${sig.slots_avail ? 'pass':'fail'}">${sig.slots_avail ? '✓':'✗'}</span>
+      <span>${n_open} / 4 positions open</span>
+    </div>
+  `;
+}
+
+// ── Gauge renderer (shared) ────────────────────────────────────────
+function renderGauges(prefix, sig, tc, ts) {
+  document.getElementById(prefix + "-p-calm-val").textContent = fmt(sig.p_calm, 4);
+  document.getElementById(prefix + "-tc-val").textContent     = tc;
+  document.getElementById(prefix + "-p-safe-val").textContent = fmt(sig.p_safe, 4);
+  document.getElementById(prefix + "-ts-val").textContent     = ts;
+
+  setGauge(prefix + "-gauge-calm-fill", prefix + "-gauge-calm-marker", sig.p_calm, tc, sig.calm_pass);
+  setGauge(prefix + "-gauge-safe-fill", prefix + "-gauge-safe-marker", sig.p_safe, ts, sig.safe_pass);
+
+  const calmVerdict = document.getElementById(prefix + "-calm-verdict");
+  calmVerdict.textContent = sig.calm_pass
+    ? `✓ Calm regime detected (${fmt(sig.p_calm * 100, 1)}% confidence)`
+    : `✗ Turbulent regime (${fmt((1 - sig.p_calm) * 100, 1)}% turbulent probability)`;
+  setColor(calmVerdict, sig.calm_pass);
+
+  const safeVerdict = document.getElementById(prefix + "-safe-verdict");
+  safeVerdict.textContent = sig.safe_pass
+    ? `✓ Low crash risk (${fmt(sig.p_safe * 100, 1)}% safe probability)`
+    : `✗ Elevated crash risk (${fmt((1 - sig.p_safe) * 100, 1)}% crash probability)`;
+  setColor(safeVerdict, sig.safe_pass);
+}
+
+// ── Feature table renderer (shared) ───────────────────────────────
+function renderFeatures(tbodyId, features) {
+  const tbody = document.getElementById(tbodyId);
+  if (!features || Object.keys(features).length === 0) {
+    tbody.innerHTML = "<tr><td colspan='3' class='muted'>No feature data</td></tr>";
+    return;
+  }
+  tbody.innerHTML = Object.entries(features).map(([k, v]) => `
+    <tr>
+      <td>${k}</td>
+      <td class="muted">${FEATURE_META[k] || ""}</td>
+      <td>${fmt(v, 5)}</td>
+    </tr>
+  `).join("");
+}
+
+// ── Tab badge helper ───────────────────────────────────────────────
+function setTabBadge(badgeId, open) {
+  const badge = document.getElementById(badgeId);
+  badge.className = "tab-badge " + (open ? "open" : "closed");
+  badge.textContent = open ? "OPEN" : "NO OPEN";
+}
+
+// ── Main refresh ───────────────────────────────────────────────────
+async function refresh() {
+  const nav   = document.getElementById("nav-input").value;
+  const nOpen = document.getElementById("n-open-input").value;
+  localStorage.setItem("prism_nav", nav);
+
+  const btn = document.getElementById("refresh-btn");
+  btn.disabled = true;
+  btn.textContent = "LOADING…";
+  document.getElementById("error-box").style.display = "none";
+
+  try {
+    const resp = await fetch(`/api/signal?nav=${nav}&n_open=${nOpen}`);
+    const d    = await resp.json();
+
+    if (!d.ok) {
+      showError(d.error + "\n\n" + (d.traceback || ""));
+      return;
+    }
+
+    const tc = d.tc;
+    const ts = d.ts;
+    const sp = d.sig_prev;
+    const sl = d.sig_live;
+
+    // ── Header ───────────────────────────────────────────────────
+    document.getElementById("timestamp").textContent = d.timestamp_et;
+    const badge = document.getElementById("market-badge");
+    badge.textContent = d.market_open ? "LIVE" : "CLOSED";
+    badge.className   = "market-badge " + (d.market_open ? "open" : "closed");
+
+    // ── Tab badges ───────────────────────────────────────────────
+    setTabBadge("tab-badge-prev", sp.signal_open);
+    setTabBadge("tab-badge-live", sl.signal_open);
+
+    // ── PAGE 1: yesterday's close ─────────────────────────────
+    renderSignalCard("sig-prev-card", "sig-prev-light", "sig-prev-title",
+                     "sig-prev-sub", "sig-prev-checks", sp, tc, ts, d.n_open);
+    renderGauges("prev", sp, tc, ts);
+    renderFeatures("prev-feature-tbody", sp.features);
+
+    // ── PAGE 2: live ───────────────────────────────────────────
+    renderSignalCard("sig-live-card", "sig-live-light", "sig-live-title",
+                     "sig-live-sub", "sig-live-checks", sl, tc, ts, d.n_open);
+    renderGauges("live", sl, tc, ts);
+    renderFeatures("live-feature-tbody", sl.features);
+
+    // Market prices
+    const spyEl  = document.getElementById("spy-live");
+    spyEl.textContent = d.spy_live ? "$" + fmt(d.spy_live, 2) : "—";
+    const change = d.spy_prev_close ? ((d.spy_live - d.spy_prev_close) / d.spy_prev_close * 100) : null;
+    const changeStr = change !== null ? (change >= 0 ? "+" : "") + fmt(change, 2) + "%" : "";
+    const changeClass = change > 0 ? "green" : change < 0 ? "red" : "muted";
+    document.getElementById("spy-sub").innerHTML =
+      `prev close $${fmt(d.spy_prev_close, 2)}&nbsp;&nbsp;<span class="${changeClass}">${changeStr}</span>`;
+    document.getElementById("vix-live").textContent  = d.vix_live  ? fmt(d.vix_live, 2)  : "—";
+    document.getElementById("vix9d-live").textContent = d.vix9d_live ? fmt(d.vix9d_live, 2) : "—";
+
+    // Divergence warning
+    document.getElementById("diverge-warning").style.display =
+      d.signals_diverge ? "block" : "none";
+
+    // Spread
+    const s = d.spread;
+    if (s) {
+      document.getElementById("K1").textContent          = "$" + fmt(s.K1, 2);
+      document.getElementById("K2").textContent          = "$" + fmt(s.K2, 2);
+      document.getElementById("expiry").textContent      = s.expiry;
+      document.getElementById("dte").textContent         = s.T_days + "d";
+      document.getElementById("credit-ps").textContent   = "$" + fmt(s.credit_per_share, 4);
+      document.getElementById("maxloss-ps").textContent  = "$" + fmt(s.max_loss_per_share, 4);
+      document.getElementById("contracts").textContent   = fmt(s.contracts, 1) + " contracts";
+      document.getElementById("credit-total").textContent  = fmtDollar(s.credit_total);
+      document.getElementById("maxloss-total").textContent = fmtDollar(s.max_loss_total);
+    }
+
+    // Status bar
+    const dot  = document.getElementById("status-dot");
+    const stxt = document.getElementById("status-text");
+    const anyOpen = sp.signal_open || sl.signal_open;
+    dot.className   = "dot " + (d.signals_diverge ? "yellow" : anyOpen ? "yellow" : "red");
+    stxt.textContent = `Last updated: ${d.timestamp_et}  ·  Signal based on ${d.prev_close_date} close`;
+
+    // Also refresh positions if that tab is active
+    if (currentTab === "positions") loadPositions();
+
+  } catch (err) {
+    showError("Network error: " + err.message);
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = "REFRESH";
+  }
+}
+
+// ── Error display ─────────────────────────────────────────────────
+function showError(msg) {
+  const box = document.getElementById("error-box");
+  box.textContent = "Error: " + msg;
+  box.style.display = "block";
+  document.getElementById("status-dot").className  = "dot red";
+  document.getElementById("status-text").textContent = "Error — check console";
+}
+
+// ── Auto-refresh ──────────────────────────────────────────────────
+function toggleAutoRefresh() {
+  clearInterval(refreshTimer);
+  clearInterval(countdownTimer);
+  document.getElementById("next-refresh-label").textContent = "";
+
+  if (document.getElementById("auto-refresh").checked) {
+    const interval = parseInt(document.getElementById("refresh-interval").value);
+    nextRefreshAt  = Date.now() + interval * 1000;
+
+    refreshTimer = setInterval(() => {
+      refresh();
+      nextRefreshAt = Date.now() + interval * 1000;
+    }, interval * 1000);
+
+    countdownTimer = setInterval(() => {
+      const remaining = Math.max(0, Math.round((nextRefreshAt - Date.now()) / 1000));
+      document.getElementById("next-refresh-label").textContent = `next in ${remaining}s`;
+    }, 1000);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// POSITION MANAGER
+// ══════════════════════════════════════════════════════════════
+const CIRC = 213.6; // 2 × π × r34
+
+function fmtPnl(val) {
+  if (val === null || val === undefined) return "—";
+  const v = parseFloat(val);
+  const sign = v >= 0 ? "+" : "";
+  return sign + "$" + Math.abs(v).toLocaleString("en-US", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2
+  });
+}
+
+function carColor(pct) {
+  if (pct >= 80) return "var(--red)";
+  if (pct >= 60) return "var(--yellow)";
+  return "var(--green)";
+}
+
+function updateDonuts(stats) {
+  const carPct  = stats.car_pct  || 0;
+  const carFill = (carPct / 100) * CIRC;
+  const carEl   = document.getElementById("donut-car-fill");
+  carEl.setAttribute("stroke-dasharray",
+    `${carFill.toFixed(1)} ${(CIRC - carFill).toFixed(1)}`);
+  carEl.setAttribute("stroke", carColor(carPct));
+  document.getElementById("donut-car-pct").textContent    = carPct.toFixed(1) + "%";
+  document.getElementById("donut-car-amount").textContent = fmtDollar(stats.car_total);
+
+  const nOpen   = stats.n_open || 0;
+  const posFill = (nOpen / 4) * CIRC;
+  const posEl   = document.getElementById("donut-pos-fill");
+  posEl.setAttribute("stroke-dasharray",
+    `${posFill.toFixed(1)} ${(CIRC - posFill).toFixed(1)}`);
+  document.getElementById("donut-pos-count").textContent = `${nOpen}/4`;
+}
+
+function updatePortfolioHeader(stats, settings) {
+  document.getElementById("pos-portfolio-val").textContent = fmtDollar(stats.portfolio_value);
+  document.getElementById("pos-initial-cap").textContent   = fmtDollar(settings.initial_capital);
+
+  const lockedEl = document.getElementById("pos-locked-pnl");
+  lockedEl.textContent = fmtPnl(stats.locked_pnl);
+  lockedEl.className = stats.locked_pnl >= 0 ? "green" : "red";
+
+  const unrealEl = document.getElementById("pos-unrealized");
+  unrealEl.textContent = fmtPnl(stats.unrealized_pnl);
+  unrealEl.className = stats.unrealized_pnl >= 0 ? "green" : "red";
+
+  const openBtn = document.getElementById("open-pos-btn");
+  openBtn.disabled = stats.n_open >= 4;
+  document.getElementById("open-pos-hint").textContent =
+    stats.n_open >= 4 ? "Maximum 4 positions reached" : "Uses live SPY / VIX prices";
+
+  const badge = document.getElementById("tab-badge-positions");
+  badge.className = "tab-badge " + (stats.n_open > 0 ? "open" : "closed");
+  badge.textContent = `${stats.n_open}/4`;
+}
+
+async function loadPositions() {
+  try {
+    const resp = await fetch("/api/positions");
+    const d    = await resp.json();
+    if (!d.ok) { console.error("Positions API error:", d.error); return; }
+    updatePortfolioHeader(d.stats, d.settings);
+    updateDonuts(d.stats);
+    renderPositions(d.positions);
+  } catch (e) {
+    console.error("Failed to load positions:", e);
+  }
+}
+
+// ── Card renderer ───────────────────────────────────────────────
+
+function renderPositions(positions) {
+  const container = document.getElementById("positions-list");
+  if (!positions || positions.length === 0) {
+    container.innerHTML = `
+      <div class="pos-empty">
+        <div class="pos-empty-icon">◈</div>
+        <div style="font-size:13px;">No positions yet — click "Open at Current Market" to begin.</div>
+      </div>`;
+    return;
+  }
+  container.innerHTML = positions.map((pos, i) => buildCard(pos, i + 1)).join("");
+  // Compute close previews for any pre-filled close forms
+  positions.forEach(pos => {
+    if (pos.status === "open") updateClosePreview(pos.id);
+  });
+}
+
+function buildCard(pos, idx) {
+  const isOpen   = pos.status === "open";
+  const isClosed = pos.status === "closed";
+  const pnl      = isOpen ? (pos.pnl_total ?? 0) : (pos.locked_pnl ?? 0);
+  const pnlClass = pnl >= 0 ? "profit" : "loss";
+  const pnlColor = pnl >= 0 ? "green"  : "red";
+
+  // ── Head ─────────────────────────────────────────────────────
+  const badge    = `<span class="pos-status-badge ${pos.status}">${pos.status.toUpperCase()}</span>`;
+  const dteStr   = isOpen && pos.dte !== undefined ? ` · DTE&nbsp;${pos.dte}d` : "";
+  const metaClosed = isClosed && pos.closed_at ? ` · Closed&nbsp;${pos.closed_at}` : "";
+  const meta = `${pos.opened_at} · Exp&nbsp;${pos.actual_expiry} · SPY&nbsp;$${fmt(pos.actual_spy, 2)}${metaClosed}${dteStr}`;
+
+  // ── Current MTM rows (open only) ──────────────────────────────
+  const shortCur = isOpen ?
+    `<div class="pos-leg-row"><span>Current</span><span>$${fmt(pos.cur_short_price, 4)}</span></div>` : "";
+  const longCur  = isOpen ?
+    `<div class="pos-leg-row"><span>Current</span><span>$${fmt(pos.cur_long_price, 4)}</span></div>`  : "";
+
+  // ── P/L summary bar ───────────────────────────────────────────
+  const pnlRow = isOpen ? `
+    <div class="pos-pnl-row ${pnlClass}">
+      <span class="pnl-amount ${pnlColor}">${fmtPnl(pnl)}</span>
+      <span class="muted">
+        ${fmt(pos.pnl_pct, 1)}% of credit received
+        &nbsp;·&nbsp;spread now $${fmt(pos.cur_spread_cost, 4)}/share
+      </span>
+    </div>` : "";
+
+  // ── Signal + close button ──────────────────────────────────────
+  let signalRow = "";
+  if (isOpen) {
+    const hasSig   = pos.close_signal;
+    const dotClass = hasSig ? "sig-red" : "sig-green";
+    const sigText  = hasSig
+      ? "CLOSE: " + (pos.signal_reasons || []).join(" · ")
+      : "Hold — no close signal triggered";
+    signalRow = `
+      <div class="pos-action-row">
+        <div class="signal-dot-sm ${dotClass}"></div>
+        <span class="signal-reason">${sigText}</span>
+        <button class="btn-danger" onclick="showCloseForm('${pos.id}')">CLOSE POSITION</button>
+      </div>`;
+  }
+
+  // ── Closed summary ──────────────────────────────────────────
+  let closedSummary = "";
+  if (isClosed) {
+    const creditTotal = pos.actual_credit_per_share * pos.actual_contracts * 100;
+    const lockedPct   = creditTotal > 0
+      ? ((pos.locked_pnl / creditTotal) * 100).toFixed(1) + "%" : "—";
+    closedSummary = `
+      <div class="pos-closed-summary">
+        <div><div class="cls-label">Close Date</div><div class="cls-val">${pos.closed_at || "—"}</div></div>
+        <div><div class="cls-label">SPY at Close</div><div class="cls-val">$${fmt(pos.close_spy, 2)}</div></div>
+        <div><div class="cls-label">Short Close</div><div class="cls-val">$${fmt(pos.close_short_premium, 4)}</div></div>
+        <div><div class="cls-label">Long Close</div><div class="cls-val">$${fmt(pos.close_long_premium, 4)}</div></div>
+        <div><div class="cls-label">Locked P/L</div>
+             <div class="cls-val ${pnlColor}">${fmtPnl(pos.locked_pnl)} (${lockedPct} of credit)</div></div>
+      </div>`;
+  }
+
+  // ── Edit form ───────────────────────────────────────────────
+  const closedExtraFields = isClosed ? `
+    <div class="edit-field"><label>SPY at Close</label>
+      <input type="number" step="0.01" id="ef-cspy-${pos.id}" value="${pos.close_spy || ""}"></div>
+    <div class="edit-field"><label>Short Close ($)</label>
+      <input type="number" step="0.01" id="ef-csp-${pos.id}" value="${pos.close_short_premium || ""}"></div>
+    <div class="edit-field"><label>Long Close ($)</label>
+      <input type="number" step="0.01" id="ef-clp-${pos.id}" value="${pos.close_long_premium || ""}"></div>
+  ` : "";
+
+  const editForm = `
+    <div class="pos-edit-form" id="edit-form-${pos.id}">
+      <div style="font-size:10px;font-weight:700;letter-spacing:2px;color:var(--accent);text-transform:uppercase;margin-bottom:10px;">
+        Edit Actual Fills
+      </div>
+      <div class="edit-grid">
+        <div class="edit-field"><label>SPY at Open</label>
+          <input type="number" step="0.01" id="ef-spy-${pos.id}" value="${pos.actual_spy}"></div>
+        <div class="edit-field"><label>Contracts</label>
+          <input type="number" step="1" min="1" id="ef-ct-${pos.id}" value="${pos.actual_contracts}"></div>
+        <div class="edit-field"><label>Expiry (YYYY-MM-DD)</label>
+          <input type="text" id="ef-exp-${pos.id}" value="${pos.actual_expiry}"></div>
+        <div class="edit-field"><label>K1 Strike (Short)</label>
+          <input type="number" step="0.5" id="ef-k1-${pos.id}" value="${pos.actual_K1}"></div>
+        <div class="edit-field"><label>Short Put Fill ($)</label>
+          <input type="number" step="0.01" id="ef-sp-${pos.id}" value="${pos.actual_short_premium}"></div>
+        <div class="edit-field" style="visibility:hidden"><label>.</label><input></div>
+        <div class="edit-field"><label>K2 Strike (Long)</label>
+          <input type="number" step="0.5" id="ef-k2-${pos.id}" value="${pos.actual_K2}"></div>
+        <div class="edit-field"><label>Long Put Fill ($)</label>
+          <input type="number" step="0.01" id="ef-lp-${pos.id}" value="${pos.actual_long_premium}"></div>
+        <div class="edit-field" style="visibility:hidden"><label>.</label><input></div>
+        ${closedExtraFields}
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" onclick="savePositionEdits('${pos.id}', ${isClosed})">SAVE</button>
+        <button class="btn-sm" onclick="cancelEditPosition('${pos.id}')">CANCEL</button>
+      </div>
+    </div>`;
+
+  // ── Close confirmation form (open only) ────────────────────
+  const defSpy   = pos.actual_spy || "";
+  const defSP    = isOpen ? (pos.cur_short_price || "") : "";
+  const defLP    = isOpen ? (pos.cur_long_price  || "") : "";
+  const closeForm = isOpen ? `
+    <div class="pos-close-form" id="close-form-${pos.id}"
+         data-credit-ps="${pos.actual_credit_per_share}"
+         data-contracts="${pos.actual_contracts}">
+      <div class="close-form-title">Confirm Close</div>
+      <div class="close-grid">
+        <div class="edit-field"><label>SPY at Close</label>
+          <input type="number" step="0.01" id="cf-spy-${pos.id}" value="${defSpy}"
+                 oninput="updateClosePreview('${pos.id}')"></div>
+        <div class="edit-field"><label>Short Put — buy back ($)</label>
+          <input type="number" step="0.01" id="cf-sp-${pos.id}" value="${defSP}"
+                 oninput="updateClosePreview('${pos.id}')"></div>
+        <div class="edit-field"><label>Long Put — sell ($)</label>
+          <input type="number" step="0.01" id="cf-lp-${pos.id}" value="${defLP}"
+                 oninput="updateClosePreview('${pos.id}')"></div>
+      </div>
+      <div class="close-preview">
+        Locked P/L preview: <strong id="cf-pnl-${pos.id}" class="muted">—</strong>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-danger" onclick="confirmClose('${pos.id}')">CONFIRM CLOSE</button>
+        <button class="btn-sm" onclick="cancelCloseForm('${pos.id}')">CANCEL</button>
+      </div>
+    </div>` : "";
+
+  return `
+    <div class="pos-card ${isClosed ? "closed-card" : pnlClass}" id="poscard-${pos.id}">
+      <div class="pos-card-head">
+        <span class="pos-card-id">Strategy&nbsp;#${idx}&nbsp;<span style="color:var(--muted);font-weight:400;font-size:10px;">${pos.id}</span></span>
+        ${badge}
+        <span class="pos-meta">${meta}</span>
+        <span class="pos-head-pnl ${pnlColor}">${fmtPnl(pnl)}</span>
+        <div class="pos-head-actions">
+          <button class="btn-sm" onclick="editPosition('${pos.id}')">EDIT</button>
+        </div>
+      </div>
+      <div class="pos-card-body">
+        <div class="pos-legs">
+          <div class="pos-leg">
+            <div class="pos-leg-label">Short Put (K1)</div>
+            <div class="pos-leg-strike">$${fmt(pos.actual_K1, 2)}</div>
+            <div class="pos-leg-row"><span>Fill</span><span>$${fmt(pos.actual_short_premium, 4)}</span></div>
+            ${shortCur}
+          </div>
+          <div class="pos-leg-mid">
+            <div class="big">×${pos.actual_contracts}</div>
+            <div>Credit&nbsp;<span style="color:var(--green);font-weight:700;">$${fmt(pos.actual_credit_per_share * pos.actual_contracts * 100, 2)}</span></div>
+            <div>MaxLoss&nbsp;<span style="color:var(--red);font-weight:700;">$${fmt(pos.actual_max_loss_per_share * pos.actual_contracts * 100, 2)}</span></div>
+          </div>
+          <div class="pos-leg">
+            <div class="pos-leg-label">Long Put (K2)</div>
+            <div class="pos-leg-strike">$${fmt(pos.actual_K2, 2)}</div>
+            <div class="pos-leg-row"><span>Fill</span><span>$${fmt(pos.actual_long_premium, 4)}</span></div>
+            ${longCur}
+          </div>
+        </div>
+        ${pnlRow}
+        ${closedSummary}
+        ${signalRow}
+      </div>
+      ${editForm}
+      ${closeForm}
+    </div>`;
+}
+
+// ── Position actions ────────────────────────────────────────────
+
+function editPosition(posId) {
+  document.getElementById(`edit-form-${posId}`).classList.add("active");
+  const cf = document.getElementById(`close-form-${posId}`);
+  if (cf) cf.classList.remove("active");
+}
+
+function cancelEditPosition(posId) {
+  document.getElementById(`edit-form-${posId}`).classList.remove("active");
+}
+
+async function savePositionEdits(posId, isClosed) {
+  const g = id => document.getElementById(id)?.value ?? "";
+  const fields = {
+    actual_spy:           g(`ef-spy-${posId}`),
+    actual_contracts:     g(`ef-ct-${posId}`),
+    actual_expiry:        g(`ef-exp-${posId}`),
+    actual_K1:            g(`ef-k1-${posId}`),
+    actual_K2:            g(`ef-k2-${posId}`),
+    actual_short_premium: g(`ef-sp-${posId}`),
+    actual_long_premium:  g(`ef-lp-${posId}`),
+  };
+  if (isClosed) {
+    fields.close_spy           = g(`ef-cspy-${posId}`);
+    fields.close_short_premium = g(`ef-csp-${posId}`);
+    fields.close_long_premium  = g(`ef-clp-${posId}`);
+  }
+  try {
+    const resp = await fetch(`/api/positions/${posId}/edit`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(fields),
+    });
+    const d = await resp.json();
+    if (!d.ok) { alert("Save error: " + d.error); return; }
+    await loadPositions();
+  } catch (e) { alert("Network error: " + e.message); }
+}
+
+function showCloseForm(posId) {
+  const cf = document.getElementById(`close-form-${posId}`);
+  const ef = document.getElementById(`edit-form-${posId}`);
+  if (cf) cf.classList.add("active");
+  if (ef) ef.classList.remove("active");
+  updateClosePreview(posId);
+}
+
+function cancelCloseForm(posId) {
+  const cf = document.getElementById(`close-form-${posId}`);
+  if (cf) cf.classList.remove("active");
+}
+
+function updateClosePreview(posId) {
+  const form    = document.getElementById(`close-form-${posId}`);
+  if (!form) return;
+  const creditPs  = parseFloat(form.dataset.creditPs  || 0);
+  const contracts = parseInt(form.dataset.contracts   || 1);
+  const sp  = parseFloat(document.getElementById(`cf-sp-${posId}`)?.value  || 0);
+  const lp  = parseFloat(document.getElementById(`cf-lp-${posId}`)?.value  || 0);
+  const pnlEl = document.getElementById(`cf-pnl-${posId}`);
+  if (!pnlEl) return;
+  const closeCost = sp - lp;
+  const pnl = (creditPs - closeCost) * contracts * 100;
+  pnlEl.textContent = fmtPnl(pnl);
+  pnlEl.className = pnl >= 0 ? "green" : "red";
+}
+
+async function confirmClose(posId) {
+  const spy = document.getElementById(`cf-spy-${posId}`)?.value;
+  const sp  = document.getElementById(`cf-sp-${posId}`)?.value;
+  const lp  = document.getElementById(`cf-lp-${posId}`)?.value;
+  if (!spy || !sp || !lp) { alert("Please fill in all close prices."); return; }
+  try {
+    const resp = await fetch(`/api/positions/${posId}/close`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        close_spy:           parseFloat(spy),
+        close_short_premium: parseFloat(sp),
+        close_long_premium:  parseFloat(lp),
+      }),
+    });
+    const d = await resp.json();
+    if (!d.ok) { alert("Close error: " + d.error); return; }
+    await loadPositions();
+  } catch (e) { alert("Network error: " + e.message); }
+}
+
+async function openPosition() {
+  const btn = document.getElementById("open-pos-btn");
+  btn.disabled    = true;
+  btn.textContent = "LOADING...";
+  try {
+    const resp = await fetch("/api/positions/open", { method: "POST" });
+    const d    = await resp.json();
+    if (!d.ok) { alert("Error: " + d.error); return; }
+    await loadPositions();
+  } catch (e) { alert("Network error: " + e.message); }
+  finally {
+    btn.disabled    = false;
+    btn.textContent = "OPEN AT CURRENT MARKET";
+  }
+}
+
+async function resetAllPositions() {
+  if (!confirm("Reset all positions and history? This cannot be undone.")) return;
+  try {
+    const resp = await fetch("/api/positions/reset", { method: "POST" });
+    const d    = await resp.json();
+    if (!d.ok) { alert("Reset error: " + d.error); return; }
+    await loadPositions();
+  } catch (e) { alert("Network error: " + e.message); }
+}
+
+async function editInitialCapital() {
+  const resp = await fetch("/api/settings");
+  const d    = await resp.json();
+  const cur  = d.settings?.initial_capital || 100000;
+  const input = prompt(
+    `Initial capital (current: $${cur.toLocaleString("en-US")}):`, cur
+  );
+  if (input === null) return;
+  const val = parseFloat(input.replace(/,/g, ""));
+  if (isNaN(val) || val <= 0) { alert("Invalid amount."); return; }
+  await fetch("/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ initial_capital: val }),
+  });
+  await loadPositions();
+}
+
+// ── Init ──────────────────────────────────────────────────────────
+refresh();
+toggleAutoRefresh();
+</script>
+</body>
+</html>
