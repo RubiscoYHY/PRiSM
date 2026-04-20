@@ -7,6 +7,8 @@ MGT 6081 — Derivative Securities | Georgia Institute of Technology | Spring 20
 
 ## Local Development
 
+### First-time setup
+
 ```bash
 git clone https://github.com/RubiscoYHY/PRiSM.git
 cd PRiSM
@@ -16,6 +18,15 @@ pip install -e .
 ```
 
 No additional configuration needed — `data/` and `results/` resolve automatically relative to the project root.
+
+### Launch the GUI
+
+After the environment is set up, activate the conda environment and run:
+
+```bash
+conda activate prism
+prism
+```
 
 ---
 
