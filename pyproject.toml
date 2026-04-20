@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "prism"
+version = "0.1.0"
+description = "Put-spread Regime-Informed Simulation & Management — MGT 6081 Final Project"
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    # Data acquisition
+    "yfinance>=0.2.40",
+
+    # Numerical computation & scientific computing
+    "numpy>=1.26",
+    "scipy>=1.13",
+
+    # Data manipulation & time series
+    "pandas>=2.2",
+
+    # Machine learning
+    "hmmlearn>=0.3.2",       # 2-state Gaussian HMM (Baum-Welch EM)
+    "xgboost>=2.0",          # XGBoost signal refinement layer
+    "scikit-learn>=1.4",     # preprocessing, metrics, cross-validation
+
+    # Visualization
+    "matplotlib>=3.9",
+    "seaborn>=0.13",
+
+    # Utilities
+    "tqdm>=4.66",            # progress bars for Monte Carlo simulation
+]
+
+[project.optional-dependencies]
+dev = [
+    "jupyter>=1.0",
+    "ipykernel>=6.29",
+    "black>=24.0",
+    "ruff>=0.4",
+]
+
+# Bloomberg Terminal blpapi is NOT available via pip.
+# Install separately: pip install --index-url=https://blpapi.bloomberg.com/repository/releases/python/simple blpapi
+# Only needed if using the Bloomberg IV interface (Section 5.1).
+# The VIX fallback (Section 5.2) works without it.
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["prism*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
