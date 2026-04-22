@@ -28,6 +28,7 @@ warnings.filterwarnings("ignore")
 
 import re
 import json
+import time
 import numpy as np
 import pandas as pd
 import xgboost as xgb
@@ -38,13 +39,14 @@ from hmmlearn.hmm import GaussianHMM
 from scipy.interpolate import interp1d
 from flask import Flask, jsonify, render_template, request
 import prism.position_manager as pm
+from prism.paths import DATA_DIR
 
-# ── Project paths ──────────────────────────────────────────────────────────────
-ROOT     = Path(__file__).parent
-DATA_DIR = ROOT / "data"
-HMM_DIR  = DATA_DIR / "HMM"
-XGB_DIR  = DATA_DIR / "XGBoost"
-GRID_DIR = DATA_DIR / "threshold_grid"
+# ── Project paths (derived from prism.paths) ─────────────────────────────────
+HMM_DIR   = DATA_DIR / "HMM"
+XGB_DIR   = DATA_DIR / "XGBoost"
+GRID_DIR  = DATA_DIR / "threshold_grid"
+CACHE_DIR = DATA_DIR / "cache"
+CACHE_DIR.mkdir(exist_ok=True)
 
 # ── Strategy constants (mirrors backtest) ──────────────────────────────────────
 R             = 0.04      # risk-free rate
@@ -113,55 +115,100 @@ def load_skew_fn() -> interp1d:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 2: Data fetching and extension
+# SECTION 2: Data fetching, caching, and extension
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _flatten_yf(df: pd.DataFrame) -> pd.DataFrame:
-    """Flatten MultiIndex columns from yfinance download."""
+# Cache file paths
+_HIST_CACHE   = CACHE_DIR / "extended_history.csv"
+_QUOTES_CACHE = CACHE_DIR / "live_quotes.json"
+
+# Cache TTLs (seconds)
+_HIST_TTL   = 3600      # 1 hour — historical rows don't change intraday
+_QUOTES_TTL = 120       # 2 minutes — live quotes refresh frequently
+
+
+def _yf_close_col(df: pd.DataFrame) -> str | None:
+    """
+    Robustly extract the 'Close' column from a yfinance DataFrame,
+    regardless of whether the columns are a MultiIndex or flat.
+    Returns the column label, or None if not found.
+    """
     if isinstance(df.columns, pd.MultiIndex):
-        df.columns = ["_".join(c).strip().lower() for c in df.columns]
+        for col in df.columns:
+            if col[0].lower() == "close":
+                return col
     else:
-        df.columns = [c.lower().replace(" ", "_") for c in df.columns]
-    return df
+        for col in df.columns:
+            if "close" in col.lower():
+                return col
+    return None
+
+
+def _yf_download_close(ticker: str, start: str) -> pd.Series:
+    """
+    Download close prices for *ticker* from *start* via yfinance.
+    Returns a Series indexed by date, or an empty Series on failure.
+    """
+    try:
+        raw = yf.download(ticker, start=start, auto_adjust=True, progress=False)
+        if raw.empty:
+            return pd.Series(dtype=float)
+        col = _yf_close_col(raw)
+        if col is None:
+            return pd.Series(dtype=float)
+        s = raw[col].copy()
+        s.index = pd.DatetimeIndex(s.index.normalize(), name="date")
+        return s
+    except Exception:
+        return pd.Series(dtype=float)
+
+
+def _cache_fresh(path: Path, ttl: int) -> bool:
+    """Return True if *path* exists and was modified less than *ttl* seconds ago."""
+    if not path.exists():
+        return False
+    return (time.time() - path.stat().st_mtime) < ttl
 
 
 def fetch_extended_history() -> pd.DataFrame:
     """
     Load historical data from disk, then extend to today via yfinance.
+    Results are cached in CACHE_DIR/extended_history.csv (TTL = 1 hour).
     Returns a unified DataFrame with columns:
         close, vix_close, vix9d_close, log_return
-    indexed by date (business days only).
+    indexed by date (business days only, excluding today).
     """
-    # Load existing history
+    today = pd.Timestamp.today().normalize()
+
+    # ── Return cached result if still fresh ──────────────────────────────
+    if _cache_fresh(_HIST_CACHE, _HIST_TTL):
+        cached = pd.read_csv(_HIST_CACHE, index_col="date", parse_dates=True)
+        cached = cached[cached.index.normalize() < today]
+        if len(cached) > 0:
+            return cached
+
+    # ── Load base history from the project CSV ───────────────────────────
     hist = pd.read_csv(DATA_DIR / "spy_vix_daily.csv", index_col="date", parse_dates=True)
     close_col = next(c for c in hist.columns if "spy" in c and "close" in c)
     hist = hist.rename(columns={close_col: "close"})
     hist = hist[["close", "vix_close", "vix9d_close", "log_return"]].copy()
     last_hist_date = hist.index.max()
 
-    # Fetch fresh data for any days since the last saved date
-    today = pd.Timestamp.today().normalize()
+    # ── Fetch fresh data for any days since the last saved date ──────────
     if last_hist_date < today:
         fetch_start = (last_hist_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
-        spy_new   = _flatten_yf(yf.download("SPY",   start=fetch_start, auto_adjust=True, progress=False))
-        vix_new   = _flatten_yf(yf.download("^VIX",  start=fetch_start, auto_adjust=True, progress=False))
-        vix9d_new = _flatten_yf(yf.download("^VIX9D",start=fetch_start, auto_adjust=True, progress=False))
+        spy_close   = _yf_download_close("SPY",    fetch_start)
+        vix_close   = _yf_download_close("^VIX",   fetch_start)
+        vix9d_close = _yf_download_close("^VIX9D", fetch_start)
 
-        if len(spy_new) > 0:
-            spy_close_col  = next(c for c in spy_new.columns  if "close" in c)
-            vix_close_col  = next(c for c in vix_new.columns  if "close" in c)
-            vix9d_close_col = next((c for c in vix9d_new.columns if "close" in c), None)
-
-            fresh = pd.DataFrame(index=spy_new.index)
+        if len(spy_close) > 0:
+            fresh = pd.DataFrame(index=spy_close.index)
             fresh.index.name = "date"
-            fresh["close"]      = spy_new[spy_close_col].values
-            fresh["vix_close"]  = vix_new[vix_close_col].reindex(spy_new.index).values
-            fresh["vix9d_close"] = (
-                vix9d_new[vix9d_close_col].reindex(spy_new.index).values
-                if vix9d_close_col else fresh["vix_close"].values
-            )
-            fresh["vix9d_close"] = pd.Series(fresh["vix9d_close"], index=fresh.index).fillna(fresh["vix_close"])
+            fresh["close"]      = spy_close.values
+            fresh["vix_close"]  = vix_close.reindex(fresh.index).values
+            fresh["vix9d_close"] = vix9d_close.reindex(fresh.index).values
+            fresh["vix9d_close"] = fresh["vix9d_close"].fillna(fresh["vix_close"])
 
             # Log returns
             prev_close = float(hist["close"].iloc[-1])
@@ -176,28 +223,47 @@ def fetch_extended_history() -> pd.DataFrame:
             hist = pd.concat([hist, fresh])
             hist = hist[~hist.index.duplicated(keep="last")].sort_index()
 
-    # Exclude today's row (may be intraday/partial) — live signal handles today separately
+    # Exclude today's row (may be intraday/partial)
     hist = hist[hist.index.normalize() < today]
+
+    # ── Write cache ──────────────────────────────────────────────────────
+    hist.to_csv(_HIST_CACHE)
     return hist
 
 
 def fetch_live_quotes() -> dict:
     """
     Fetch current SPY, VIX, VIX9D prices via yfinance.
-    During market hours: ~15-min delayed live price.
-    Outside market hours: most recent close / last traded price.
-    Returns a dict with price info and market status.
+    Uses t.history(period="5d") as the primary source (more reliable),
+    with fast_info as a cross-check.
+    Results are cached in CACHE_DIR/live_quotes.json (TTL = 2 minutes).
     """
+    # ── Return cached result if still fresh ──────────────────────────────
+    if _cache_fresh(_QUOTES_CACHE, _QUOTES_TTL):
+        try:
+            with open(_QUOTES_CACHE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, KeyError):
+            pass  # cache corrupt, re-fetch
+
     result = {}
 
     for ticker_sym, key in [("SPY", "spy"), ("^VIX", "vix"), ("^VIX9D", "vix9d")]:
         try:
             t = yf.Ticker(ticker_sym)
-            fi = t.fast_info
-            price = getattr(fi, "last_price", None)
-            if price is None or np.isnan(price):
-                price = t.history(period="5d")["Close"].iloc[-1]
-            result[f"{key}_live"] = round(float(price), 2)
+            # Primary: use history(period="5d") — most reliable
+            h = t.history(period="5d")
+            if len(h) > 0:
+                price = float(h["Close"].iloc[-1])
+            else:
+                # Fallback: fast_info
+                fi = t.fast_info
+                price = getattr(fi, "last_price", None)
+                if price is not None and not np.isnan(price):
+                    price = float(price)
+                else:
+                    price = None
+            result[f"{key}_live"] = round(price, 2) if price else None
         except Exception:
             result[f"{key}_live"] = None
 
@@ -213,6 +279,10 @@ def fetch_live_quotes() -> dict:
     market_close = now_et.replace(hour=16, minute=0,  second=0, microsecond=0)
     result["market_open"] = is_weekday and (market_open <= now_et <= market_close)
     result["timestamp_et"] = now_et.strftime("%Y-%m-%d %H:%M:%S ET")
+
+    # ── Write cache ──────────────────────────────────────────────────────
+    with open(_QUOTES_CACHE, "w") as f:
+        json.dump(result, f)
 
     return result
 
