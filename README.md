@@ -19,6 +19,20 @@ pip install -e .
 
 No additional configuration needed — `data/` and `results/` resolve automatically relative to the project root.
 
+### Download data from Google Drive
+
+Download the shared `data/`, `results/`, and `notes/` folders from Google Drive and place them in the project root. **Important:** macOS may rename extracted folders to `data 2`, `results 2`, etc. if a folder with the same name already exists. Make sure the folders are named exactly `data/`, `results/`, and `notes/` — otherwise the project will not find them.
+
+### Pull updates
+
+After the initial setup, pull the latest code with:
+
+```bash
+git pull
+```
+
+Because the package is installed in editable mode (`-e`), all code changes — including the `prism` command — take effect immediately. No need to re-run `pip install -e .` unless you are told that new dependencies have been added.
+
 ### Launch the GUI
 
 After the environment is set up, activate the conda environment and run:
