@@ -601,12 +601,12 @@ def api_open_position():
         positions = pm.load_positions()
         live      = fetch_live_quotes()
         skew_fn   = load_skew_fn()
-        S_live    = live["spy_live"]
-        vix_live  = live["vix_live"]
-        vix9d_live = live["vix9d_live"]
 
-        if not S_live or not vix_live:
-            return jsonify({"ok": False, "error": "Live prices unavailable"}), 503
+        # Fall back to last official close if live quotes unavailable
+        df        = fetch_extended_history()
+        S_live    = live["spy_live"]   or round(float(df["close"].iloc[-1]), 2)
+        vix_live  = live["vix_live"]   or round(float(df["vix_close"].iloc[-1]), 2)
+        vix9d_live = live["vix9d_live"]
 
         # Check open position count
         n_open = sum(1 for p in positions if p["status"] == "open")
