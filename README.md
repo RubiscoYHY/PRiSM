@@ -46,9 +46,20 @@ prism
 
 ## Google Colab (Simulation Notebooks Only)
 
-Colab sessions are ephemeral and install packages into a non-writable system path, so output directories must be redirected to Google Drive before importing any `prism` module.
+Colab sessions are ephemeral, so `data/` and `results/` must live on Google Drive. The repo itself is cloned into the Colab runtime (faster than Drive I/O).
 
-Run the following setup cell at the top of every simulation notebook:
+### Setup steps
+
+1. **Copy the shared `data/` and `results/` folders** into a location on your own Google Drive (any path works).
+2. **Find that path.** Open the folder in Google Drive, look at the URL, or browse the left sidebar in Colab after mounting. For example, if you placed the folders under `My Drive > Courses > MGT6081 > PRiSM`, the path would be:
+   ```
+   /content/drive/MyDrive/Courses/MGT6081/PRiSM
+   ```
+3. **Paste your path into the setup cell below** — only the line marked `# ← CHANGE THIS` needs editing.
+
+### Setup cell
+
+Run this at the top of every simulation notebook:
 
 ```python
 # ── Colab Setup ───────────────────────────────────────────────
@@ -58,26 +69,28 @@ from google.colab import drive
 
 # 1. Mount Google Drive
 drive.mount("/content/drive")
-PRISM_ROOT = Path("/content/drive/MyDrive/PRiSM")
 
-# 2. Point to data/ — update DATA_SRC if the shared folder is at a different path
-#    (e.g. after adding a Drive shortcut to your My Drive)
-DATA_SRC = Path("/content/drive/MyDrive/PRiSM_data")   # ← shared folder shortcut
-os.environ["PRISM_DATA_DIR"]    = str(DATA_SRC if DATA_SRC.exists() else PRISM_ROOT / "data")
-os.environ["PRISM_RESULTS_DIR"] = str(PRISM_ROOT / "results")
+# 2. ★ CHANGE THIS to the Drive folder that contains your data/ and results/ ★
+DRIVE_ROOT = Path("/content/drive/MyDrive/Courses/MGT6081/PRiSM")   # ← CHANGE THIS
 
-# 3. Clone repo and install (skip if already done)
-if not (PRISM_ROOT / "prism").exists():
-    os.system(f"git clone https://github.com/RubiscoYHY/PRiSM.git {PRISM_ROOT}")
-os.system(f"pip install -e {PRISM_ROOT} -q")
+# 3. Point prism.paths to Drive folders (MUST set before importing prism)
+os.environ["PRISM_DATA_DIR"]    = str(DRIVE_ROOT / "data")
+os.environ["PRISM_RESULTS_DIR"] = str(DRIVE_ROOT / "results")
 
-sys.path.insert(0, str(PRISM_ROOT))
+# 4. Clone repo into Colab runtime and install (no changes needed below)
+REPO_DIR = Path("/content/PRiSM")
+if not (REPO_DIR / "prism").exists():
+    !git clone https://github.com/RubiscoYHY/PRiSM.git {REPO_DIR}
+!pip install -e {REPO_DIR} -q
+
+sys.path.insert(0, str(REPO_DIR))
+
 print(f"DATA_DIR    → {os.environ['PRISM_DATA_DIR']}")
 print(f"RESULTS_DIR → {os.environ['PRISM_RESULTS_DIR']}")
 # ─────────────────────────────────────────────────────────────
 ```
 
-> **Important:** `os.environ` must be set before any `from prism import ...` statement.
+> **Important:** `os.environ` must be set **before** any `from prism import ...` statement.
 > Once set, all modules resolve paths automatically — no further configuration required.
 
 ---
