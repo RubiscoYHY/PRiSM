@@ -1,23 +1,24 @@
 """
 test_evaluation_extended.py
 ============================
-Extended test-set evaluation (2022 – 2026-04-01) for PRISM.
+Extended test-set evaluation (2022 – 2026-04) for PRISM.
 
-Uses the SAME trained models as the locked test evaluation:
-  - HMM : same 2-state GaussianHMM trained on 2015-2020 (refit in
-          data_collection_extended.py, converges to identical parameters)
-  - XGBoost : loaded directly from data/XGBoost/xgb_model.json (no retraining)
-  - Thresholds : tc=0.71, ts=0.95 (locked on validation set, unchanged)
+Compares three investment approaches using the SMOTE-trained XGBoost model:
+  1. Short put spread strategy  (options, signal-gated)
+  2. SPY buy-and-hold           (passive benchmark)
+  3. Long-only market timing    (hold SPY when both signals pass, cash otherwise)
 
-This is a pure out-of-sample extension experiment. The 2025-2026 period
-has never been seen by any model component.
+Models:
+  - HMM     : 2-state GaussianHMM trained on 2015-2020
+  - XGBoost  : SMOTE-balanced, loaded from data/XGBoost/xgb_model.json
+  - Thresholds: tc=0.71, ts=0.62 (Sharpe-optimal on validation set)
 
 Run data_collection_extended.py first to populate data/extended/.
 
 Outputs (results/test_evaluation_extended/):
-  test_nav_comparison_ext.png  -- 4-curve normalised NAV (SPY + 3 strategies)
-  test_metrics_ext.csv         -- Sharpe, MaxDD, CVaR95, Sortino for all 4 rows
-  test_metrics_ext.txt         -- Human-readable summary table
+  test_nav_comparison_ext.png  -- NAV curves for all strategies
+  test_metrics_ext.csv         -- full metrics table
+  test_metrics_ext.txt         -- human-readable summary
 """
 
 import warnings
@@ -42,15 +43,16 @@ EXT_TEST_DIR = RESULTS_DIR / "test_evaluation_extended"
 EXT_TEST_DIR.mkdir(exist_ok=True)
 
 TC_OPT = 0.71
-TS_OPT = 0.95
+TS_OPT = 0.62
 
 TEST_START = "2022-01-01"
-TEST_END   = "2026-04-01"
+TEST_END   = "2026-05-01"
 
-STRATEGIES = [
-    {"name": "Baseline",    "tc": 0.00,   "ts": 0.00,   "color": "#888888", "ls": "--"},
-    {"name": "HMM-only",    "tc": TC_OPT, "ts": 0.00,   "color": "#F5A623", "ls": "-."},
-    {"name": "HMM+XGBoost", "tc": TC_OPT, "ts": TS_OPT, "color": "#2A9D8F", "ls": "-"},
+# Option spread strategies (run through the backtest engine)
+SPREAD_STRATEGIES = [
+    {"name": "Spread: Baseline",    "tc": 0.00,   "ts": 0.00,   "color": "#888888", "ls": ":"},
+    {"name": "Spread: HMM-only",    "tc": TC_OPT, "ts": 0.00,   "color": "#F5A623", "ls": "-."},
+    {"name": "Spread: HMM+XGBoost", "tc": TC_OPT, "ts": TS_OPT, "color": "#2A9D8F", "ls": "-"},
 ]
 
 
@@ -144,53 +146,145 @@ def compute_spy_metrics(spy_series: pd.Series) -> dict:
 # SECTION 3: Plot
 # ─────────────────────────────────────────────────────────────
 
+def run_timing_strategy(
+    prices: pd.Series,
+    signal: pd.Series,
+) -> tuple[pd.Series, dict]:
+    """
+    Long-only market timing: hold SPY when signal is True, hold cash otherwise.
+    Signal on day t → exposed to day t+1 return.
+    Returns (nav_series, metrics_dict).
+    """
+    daily_ret = prices.pct_change().fillna(0.0)
+    position  = signal.shift(1).fillna(False).astype(float)
+    strat_ret = daily_ret * position
+    nav       = (1 + strat_ret).cumprod() * INITIAL_CASH
+
+    n_days     = len(nav)
+    total_ret  = nav.iloc[-1] / INITIAL_CASH - 1
+    years      = n_days / 252
+    annual_ret = (1 + total_ret) ** (1 / years) - 1
+    ann_vol    = strat_ret.std() * np.sqrt(252)
+    sharpe     = annual_ret / ann_vol if ann_vol > 1e-8 else 0.0
+    max_dd     = ((nav / nav.cummax()) - 1).min()
+
+    var_95  = strat_ret.quantile(0.05)
+    cvar_95 = strat_ret[strat_ret <= var_95].mean()
+
+    neg_r        = strat_ret[strat_ret < 0]
+    downside_vol = np.sqrt((neg_r ** 2).mean()) * np.sqrt(252) if len(neg_r) > 0 else 1e-8
+    sortino      = annual_ret / downside_vol
+
+    exposure = position.mean()
+    n_trades = int((position.diff().abs() > 0.5).sum())
+
+    return nav, {
+        "sharpe":        round(float(sharpe), 4),
+        "total_return":  round(float(total_ret), 4),
+        "annual_return": round(float(annual_ret), 4),
+        "vol":           round(float(ann_vol), 4),
+        "max_dd":        round(float(max_dd), 4),
+        "cvar_95":       round(float(cvar_95), 4),
+        "sortino":       round(float(sortino), 4),
+        "exposure":      round(float(exposure), 4),
+        "n_trades":      n_trades,
+    }
+
+
 def plot_nav_comparison(
     spy_series: pd.Series,
-    nav_results: dict[str, pd.DataFrame],
+    all_navs: dict[str, pd.Series],
+    all_metrics: list[dict],
     test_end: str,
 ) -> None:
     """
-    4-curve normalised NAV: SPY + 3 strategies.
-    Vertical dashed line marks the original test-set end (2024-12-31)
-    to visually separate the locked test period from the live extension.
+    Plot NAV curves for all strategies (spread, timing, SPY B&H).
     """
-    fig, ax = plt.subplots(figsize=(13, 6))
+    import matplotlib.dates as mdates
 
-    spy_norm = spy_series / spy_series.iloc[0] * 100
-    ax.plot(spy_norm.index, spy_norm.values,
-            color="#264653", linewidth=1.8, linestyle=":",
-            label="SPY (buy-and-hold)", zorder=3)
+    fig, axes = plt.subplots(2, 1, figsize=(16, 12),
+                              gridspec_kw={"height_ratios": [2, 1], "hspace": 0.15})
 
-    for strat in STRATEGIES:
-        name   = strat["name"]
-        nav_df = nav_results[name]
-        norm   = nav_df["nav"] / INITIAL_CASH * 100
+    # ── Top panel: NAV curves ──
+    ax = axes[0]
+    colors = {
+        "SPY (Buy & Hold)":        "#264653",
+        "Timing: HMM+XGBoost":    "#E76F51",
+        "Spread: Baseline":       "#888888",
+        "Spread: HMM-only":       "#F5A623",
+        "Spread: HMM+XGBoost":    "#2A9D8F",
+    }
+    lstyles = {
+        "SPY (Buy & Hold)":        "-",
+        "Timing: HMM+XGBoost":    "-",
+        "Spread: Baseline":       ":",
+        "Spread: HMM-only":       "-.",
+        "Spread: HMM+XGBoost":    "-",
+    }
+    lwidths = {
+        "SPY (Buy & Hold)":        2.0,
+        "Timing: HMM+XGBoost":    2.5,
+        "Spread: Baseline":       1.2,
+        "Spread: HMM-only":       1.5,
+        "Spread: HMM+XGBoost":    2.5,
+    }
+
+    metrics_lookup = {m["strategy"]: m for m in all_metrics}
+
+    for name, nav in all_navs.items():
+        norm = nav / nav.iloc[0] * 100
+        m = metrics_lookup.get(name, {})
+        sharpe = m.get("sharpe", 0)
+        ann_ret = m.get("annual_return", 0)
+        max_dd = m.get("max_dd", 0)
+        label = f"{name}  |  Sharpe={sharpe:+.3f}  Ann={ann_ret:+.1%}  MaxDD={max_dd:.1%}"
         ax.plot(norm.index, norm.values,
-                color=strat["color"], linewidth=1.8,
-                linestyle=strat["ls"], label=name, zorder=4)
+                color=colors.get(name, "black"),
+                linestyle=lstyles.get(name, "-"),
+                linewidth=lwidths.get(name, 1.5),
+                label=label, zorder=4)
 
     ax.axhline(100, color="black", linewidth=0.6, linestyle="--", alpha=0.4)
 
-    # Mark original test boundary (2024-12-31)
     orig_end = pd.Timestamp("2024-12-31")
-    ax.axvline(orig_end, color="navy", linewidth=1.2, linestyle="--", alpha=0.7)
-    ax.text(orig_end, ax.get_ylim()[1] if ax.get_ylim()[1] > 0 else 200,
-            "  Original\n  test end\n  (2024-12-31)",
-            fontsize=8, color="navy", va="top", ha="left")
+    ax.axvline(orig_end, color="navy", linewidth=1.2, linestyle="--", alpha=0.5)
+    ax.text(orig_end, ax.get_ylim()[1] * 0.95 if ax.get_ylim()[1] > 0 else 200,
+            "  Original test end", fontsize=8, color="navy", va="top")
 
     ax.set_title(
-        f"PRiSM — Extended Test Set Portfolio Performance (2022 – {test_end})",
-        fontsize=13, fontweight="bold"
+        f"PRiSM — Strategy Comparison: Short Put Spread vs Market Timing vs Buy & Hold\n"
+        f"Test: 2022-01-01 – {test_end}  |  tc={TC_OPT}  ts={TS_OPT}",
+        fontsize=13, fontweight="bold",
     )
-    ax.set_xlabel("Date", fontsize=11)
-    ax.set_ylabel("Normalised NAV  (start = 100)", fontsize=11)
-    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.0f"))
-    ax.legend(fontsize=10, loc="upper left")
+    ax.set_ylabel("NAV (normalized to 100)", fontsize=11)
+    ax.legend(fontsize=8.5, loc="upper left", framealpha=0.9)
     ax.grid(True, alpha=0.25)
-    plt.tight_layout()
 
+    # ── Bottom panel: Drawdown ──
+    ax2 = axes[1]
+    highlight = ["SPY (Buy & Hold)", "Timing: HMM+XGBoost", "Spread: HMM+XGBoost"]
+    for name in highlight:
+        if name not in all_navs:
+            continue
+        nav = all_navs[name]
+        dd = (nav / nav.cummax() - 1) * 100
+        ax2.fill_between(dd.index, dd.values, 0, alpha=0.3,
+                         color=colors.get(name, "gray"))
+        ax2.plot(dd.index, dd.values, color=colors.get(name, "gray"),
+                 linewidth=0.8, label=name)
+
+    ax2.set_ylabel("Drawdown (%)", fontsize=11)
+    ax2.legend(fontsize=9, loc="lower left")
+    ax2.grid(True, alpha=0.25)
+
+    for a in axes:
+        a.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+        a.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+        plt.setp(a.xaxis.get_majorticklabels(), rotation=30, ha="right")
+
+    plt.tight_layout()
     out = EXT_TEST_DIR / "test_nav_comparison_ext.png"
-    plt.savefig(out, dpi=150)
+    plt.savefig(out, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"  Saved → {out}")
 
@@ -258,58 +352,71 @@ def save_metrics(all_metrics: list[dict], n_days: int, date_range: str) -> None:
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("PRiSM — Extended Test Set Evaluation (2022 – 2026-04-01)")
+    print("PRiSM — Extended Test Evaluation: 3-Strategy Comparison")
     print("=" * 60)
-    print("  Models used:")
-    print("    HMM      : refit on 2015-2020 (same window, data/extended/)")
-    print("    XGBoost  : data/XGBoost/xgb_model.json  (NO retraining)")
-    print("    Thresholds: tc=0.71, ts=0.95  (locked on validation set)")
+    print(f"  Thresholds : tc={TC_OPT}, ts={TS_OPT}")
+    print(f"  XGBoost    : SMOTE-balanced model")
 
-    print("\n[1/3] Loading extended data...")
+    print("\n[1/4] Loading extended data...")
     feat = load_extended_data()
     skew_fn = load_skew_fn()
 
     feat_test = feat[
         (feat.index >= TEST_START) & (feat.index < TEST_END)
     ]
-    print(f"  Extended test rows: {len(feat_test)} "
+    print(f"  Test rows: {len(feat_test)} "
           f"({feat_test.index[0].date()} – {feat_test.index[-1].date()})")
 
     spy_test = feat_test["close"].copy()
 
-    print("\n[2/3] Running backtests...")
-    nav_results = {}
+    # ── Collect all NAV series and metrics ──
+    all_navs    = {}
     all_metrics = []
 
-    for strat in STRATEGIES:
+    # ── A. Short put spread strategies ──
+    print("\n[2/4] Running spread backtests...")
+    for strat in SPREAD_STRATEGIES:
         name = strat["name"]
         print(f"  [{name}]  tc={strat['tc']:.2f}  ts={strat['ts']:.2f}")
         nav_df, base_m = run_backtest(feat_test, strat["tc"], strat["ts"], skew_fn)
         ext_m = compute_extended_metrics(nav_df, base_m)
 
-        nav_results[name] = nav_df
+        all_navs[name] = nav_df["nav"]
         all_metrics.append({"strategy": name, **ext_m})
 
         print(f"    Sharpe={ext_m['sharpe']:.3f}  "
               f"AnnRet={ext_m['annual_return']:.2%}  "
-              f"MaxDD={ext_m['max_dd']:.2%}  "
-              f"CVaR95={ext_m['cvar_95']:.4f}  "
-              f"Sortino={ext_m['sortino']:.3f}")
+              f"MaxDD={ext_m['max_dd']:.2%}")
 
-    # SPY benchmark
+    # ── B. Market timing (long-only) ──
+    print("\n[3/4] Running market timing backtest...")
+    timing_signal = (feat_test["p_calm"] > TC_OPT) & (feat_test["p_safe"] > TS_OPT)
+    timing_nav, timing_m = run_timing_strategy(spy_test, timing_signal)
+
+    all_navs["Timing: HMM+XGBoost"] = timing_nav
+    all_metrics.append({"strategy": "Timing: HMM+XGBoost", **timing_m})
+    print(f"  [Timing: HMM+XGBoost]  tc={TC_OPT}  ts={TS_OPT}")
+    print(f"    Sharpe={timing_m['sharpe']:.3f}  "
+          f"AnnRet={timing_m['annual_return']:.2%}  "
+          f"MaxDD={timing_m['max_dd']:.2%}  "
+          f"Exposure={timing_m['exposure']:.1%}  "
+          f"Trades={timing_m['n_trades']}")
+
+    # ── C. SPY buy-and-hold ──
     spy_m = compute_spy_metrics(spy_test)
-    all_metrics.append({"strategy": "SPY (B&H)", **spy_m})
-    print(f"  [SPY (B&H)]")
+    all_navs["SPY (Buy & Hold)"] = spy_test
+    all_metrics.append({"strategy": "SPY (Buy & Hold)", **spy_m})
+    print(f"  [SPY (Buy & Hold)]")
     print(f"    Sharpe={spy_m['sharpe']:.3f}  "
           f"AnnRet={spy_m['annual_return']:.2%}  "
-          f"MaxDD={spy_m['max_dd']:.2%}  "
-          f"CVaR95={spy_m['cvar_95']:.4f}  "
-          f"Sortino={spy_m['sortino']:.3f}")
+          f"MaxDD={spy_m['max_dd']:.2%}")
 
-    print("\n[3/3] Plotting and saving results...")
+    # ── D. Save and plot ──
+    print("\n[4/4] Plotting and saving results...")
     date_range = (f"{feat_test.index[0].strftime('%Y-%m-%d')} – "
                   f"{feat_test.index[-1].strftime('%Y-%m-%d')}")
-    plot_nav_comparison(spy_test, nav_results, feat_test.index[-1].strftime("%Y-%m-%d"))
+    test_end_str = feat_test.index[-1].strftime("%Y-%m-%d")
+    plot_nav_comparison(spy_test, all_navs, all_metrics, test_end_str)
     save_metrics(all_metrics, len(feat_test), date_range)
 
     print("\n" + "=" * 60)

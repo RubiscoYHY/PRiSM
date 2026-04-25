@@ -9,10 +9,9 @@ Pipeline:
      DD_60d, RSkew_20d, P(Calm)
   3. Construct binary label: did SPY drop >5% in the next 30 calendar days?
   4. Train/val/test split: 2015-2020 / 2020-2022 / 2022-2024
-  5. SMOTE oversampling on the training set to balance Crash / Safe
-  6. Bayesian optimization via Optuna (100 trials, 5-fold time-series CV, F1)
-  7. Retrain on full SMOTE-balanced training set with best params
-  8. Save model, convergence plot, hyperparameter importance
+  5. Bayesian optimization via Optuna (100 trials, 5-fold time-series CV, F1)
+  6. Retrain on full training set with best params
+  7. Save model, convergence plot, hyperparameter importance
 
 Outputs (data/XGBoost/):
   xgb_model.json              - trained XGBoost model
@@ -36,8 +35,7 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import f1_score, classification_report
-from imblearn.over_sampling import SMOTE
-from prism.paths import DATA_DIR
+from experiment.paths import DATA_DIR
 
 # ─────────────────────────────────────────────────────────────
 # Output directory
@@ -178,52 +176,40 @@ def split_data(feat: pd.DataFrame):
 # SECTION 4: Bayesian optimisation via Optuna
 # ─────────────────────────────────────────────────────────────
 
-def apply_smote(X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Apply SMOTE to balance Crash (minority, label=1) vs Safe (majority, label=0).
-    """
-    smote = SMOTE(random_state=42)
-    X_bal, y_bal = smote.fit_resample(X, y)
-    safe_n  = (y_bal == 0).sum()
-    crash_n = (y_bal == 1).sum()
-    print(f"  SMOTE: {(y==0).sum()} Safe + {(y==1).sum()} Crash "
-          f"→ {safe_n} Safe + {crash_n} Crash")
-    return X_bal, y_bal
-
-
 def run_optuna(X_train: np.ndarray, y_train: np.ndarray,
-               n_trials: int = 100, n_splits: int = 5) -> optuna.Study:
+               n_trials: int = 200, n_splits: int = 5) -> optuna.Study:
     """
     Optimise XGBoost hyperparameters using Optuna TPE sampler.
-
-    Training data is SMOTE-balanced, so scale_pos_weight is fixed at 1.0
-    and max_delta_step=1 is used to regularise gradient updates.
 
     Inner loop: 5-fold time-series cross-validation (no data leakage).
     Objective: macro F1 score on validation folds.
 
     Search space:
-        max_depth         : int   [2, 6]
-        n_estimators      : int   [50, 300]
+        max_depth         : int   [3, 10]
+        n_estimators      : int   [50, 500]
         learning_rate     : float [0.01, 0.3]  (log scale)
-        subsample         : float [0.6, 1.0]
-        colsample_bytree  : float [0.6, 1.0]
+        subsample         : float [0.5, 1.0]
+        colsample_bytree  : float [0.5, 1.0]
         min_child_weight  : int   [1, 10]
+        scale_pos_weight  : float [1.0, 20.0]  (handles class imbalance)
         reg_alpha         : float [1e-8, 1.0]  (log scale, L1)
         reg_lambda        : float [1e-8, 1.0]  (log scale, L2)
     """
     tscv = TimeSeriesSplit(n_splits=n_splits)
+    pos_count = y_train.sum()
+    neg_count = len(y_train) - pos_count
+    default_spw = neg_count / max(pos_count, 1)
+    print(f"  Default scale_pos_weight (neg/pos ratio): {default_spw:.1f}")
 
     def objective(trial):
         params = {
-            "max_depth":         trial.suggest_int("max_depth", 2, 6),
-            "n_estimators":      trial.suggest_int("n_estimators", 50, 300),
+            "max_depth":         trial.suggest_int("max_depth", 3, 10),
+            "n_estimators":      trial.suggest_int("n_estimators", 50, 500),
             "learning_rate":     trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
-            "subsample":         trial.suggest_float("subsample", 0.6, 1.0),
-            "colsample_bytree":  trial.suggest_float("colsample_bytree", 0.6, 1.0),
+            "subsample":         trial.suggest_float("subsample", 0.5, 1.0),
+            "colsample_bytree":  trial.suggest_float("colsample_bytree", 0.5, 1.0),
             "min_child_weight":  trial.suggest_int("min_child_weight", 1, 10),
-            "scale_pos_weight":  1.0,
-            "max_delta_step":    1,
+            "scale_pos_weight":  trial.suggest_float("scale_pos_weight", 1.0, 20.0),
             "reg_alpha":         trial.suggest_float("reg_alpha", 1e-8, 1.0, log=True),
             "reg_lambda":        trial.suggest_float("reg_lambda", 1e-8, 1.0, log=True),
             "objective":   "binary:logistic",
@@ -333,13 +319,11 @@ def train_final_model(
     X_test:  np.ndarray, y_test:  np.ndarray,
 ) -> xgb.XGBClassifier:
     """
-    Retrain XGBoost on the full SMOTE-balanced training set using the best
-    Optuna params.  Evaluate on val and test sets (read-only report).
+    Retrain XGBoost on the full training set using the best Optuna params.
+    Evaluate on val and test sets (read-only report — no further tuning).
     """
     params = {
         **best_params,
-        "scale_pos_weight": 1.0,
-        "max_delta_step":   1,
         "objective":   "binary:logistic",
         "eval_metric": "logloss",
         "verbosity":   0,
@@ -393,38 +377,35 @@ def save_params_summary(study: optuna.Study) -> None:
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("PRISM — XGBoost Layer 2 Training (SMOTE)")
+    print("PRISM — XGBoost Layer 2 Training")
     print("=" * 60)
 
-    print("\n[1/7] Loading data...")
+    print("\n[1/6] Loading data...")
     df = load_data()
 
-    print("\n[2/7] Engineering features...")
+    print("\n[2/6] Engineering features...")
     feat = build_features(df)
 
-    print("\n[3/7] Splitting data...")
+    print("\n[3/6] Splitting data...")
     X_train, y_train, X_val, y_val, X_test, y_test = split_data(feat)
 
-    print("\n[4/7] Applying SMOTE to training set...")
-    X_train_bal, y_train_bal = apply_smote(X_train, y_train)
+    print("\n[4/6] Running Optuna (200 trials, 5-fold time-series CV)...")
+    study = run_optuna(X_train, y_train, n_trials=200, n_splits=5)
 
-    print("\n[5/7] Running Optuna (100 trials, 5-fold time-series CV)...")
-    study = run_optuna(X_train_bal, y_train_bal, n_trials=100, n_splits=5)
-
-    print("\n[6/7] Generating plots...")
+    print("\n[5/6] Generating plots...")
     plot_convergence(study)
     plot_param_importance(study)
     save_params_summary(study)
 
-    print("\n[7/7] Training final model on SMOTE-balanced training set...")
+    print("\n[6/6] Training final model on full training set...")
     model = train_final_model(
         study.best_params,
-        X_train_bal, y_train_bal,
+        X_train, y_train,
         X_val,   y_val,
         X_test,  y_test,
     )
 
     print("\n" + "=" * 60)
-    print("XGBoost training complete (SMOTE).")
+    print("XGBoost training complete.")
     print(f"All outputs saved to: {XGB_DIR}")
     print("=" * 60)

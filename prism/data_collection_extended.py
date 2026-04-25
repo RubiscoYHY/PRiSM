@@ -31,7 +31,7 @@ EXT_DIR = DATA_DIR / "extended"
 EXT_DIR.mkdir(exist_ok=True)
 
 DATA_START = "2015-01-01"
-DATA_END   = "2026-04-01"
+DATA_END   = "2026-04-26"
 
 
 # ─────────────────────────────────────────────────────────────
